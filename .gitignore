@@ -1,0 +1,25 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+**/.env
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+env/
+
+# Node
+node_modules/
+.next/
+*.log
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# App
+temp/
+tmp/
