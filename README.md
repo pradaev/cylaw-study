@@ -5,8 +5,8 @@ AI-powered legal research assistant for Cypriot court cases. Search through 150,
 ## What it does
 
 - **AI-powered legal research** — ask legal questions, get answers with citations to specific cases
-- **Multi-agent analysis** — parallel AI agents summarize full court decisions for accurate research
-- **Document viewer** — read full case text directly in the browser
+- **Multi-agent analysis** — parallel AI agents summarize full court decisions with 4-level relevance rating (RULED/DISCUSSED/MENTIONED/NOT ADDRESSED)
+- **Document viewer** — read full case text with AI analysis summary shown before the document
 - **Multi-model** — GPT-4o, o3-mini, Claude Sonnet 4 (user selects in UI)
 - **Cost tracking** — per-request cost and token usage displayed
 - **Translation** — toggle English translation for non-Greek speakers
@@ -35,7 +35,10 @@ User → Next.js (React) → API Routes → Main LLM (GPT-4o)
 **Key design decisions:**
 - Search returns metadata only (no full text) — fast and cheap
 - Each document is summarized in parallel by a dedicated GPT-4o agent
+- Summaries include engagement level (RULED/DISCUSSED/MENTIONED) and relevance rating — prevents main LLM from fabricating court holdings
+- Results sorted by relevance then by year (newest first) at code level
 - Main LLM receives focused summaries (~10K tokens) instead of full docs (~150K tokens)
+- AI Analysis shown in DocViewer before full text — user sees summary reasoning per case
 - Authentication via Cloudflare Zero Trust (email-based OTP)
 
 ## Data Pipeline

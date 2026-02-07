@@ -41,9 +41,15 @@
 - [ ] Search within a specific case's citations
 
 ### Summarizer improvements
+- [x] 4-level engagement system (RULED/DISCUSSED/MENTIONED/NOT ADDRESSED)
+- [x] 4-level relevance rating (HIGH/MEDIUM/LOW/NONE)
+- [x] AI Analysis panel in DocViewer (shows summary before full text)
+- [x] Eval test suite for summarizer accuracy (`scripts/test_summarizer_eval.mjs`)
+- [x] Fix fabrication: main LLM no longer invents court holdings from vague summaries
 - [ ] Evaluate Claude Sonnet 4 as summarizer (potentially better at Greek legal text)
-- [ ] Cache summaries to avoid re-summarizing same documents
+- [ ] Persistent summary cache (avoid re-summarizing same doc for same query)
 - [ ] Allow user to request "deep dive" on a specific case (full analysis)
+- [ ] Expand eval suite with more test cases and documents
 
 ## Low Priority
 
@@ -78,3 +84,12 @@
 - [x] Cost tracking per request
 - [x] Cloudflare Zero Trust authentication
 - [x] Deployed to Cloudflare Workers
+
+### ✅ Summarizer accuracy (2026-02-07 evening)
+- [x] 4-level engagement: RULED/DISCUSSED/MENTIONED/NOT ADDRESSED
+- [x] 4-level relevance: HIGH/MEDIUM/LOW/NONE
+- [x] AI Analysis panel in DocViewer (summary before full text)
+- [x] Eval test suite (28/28 assertions, fabrication detection)
+- [x] Fixed: main LLM fabricating court holdings from vague summaries
+- [x] Fixed: MEDIUM cases (substantive discussion) being dropped as LOW
+- [x] Year-based sorting at code level (not LLM)

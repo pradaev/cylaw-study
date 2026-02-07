@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-02-07 (evening)
+
+### Added — Summarizer accuracy & relevance system
+- **4-level engagement classification**: RULED / DISCUSSED / MENTIONED / NOT ADDRESSED — replaces binary "addressed/not addressed", prevents summarizer from conflating "party argued X" with "court ruled X"
+- **4-level relevance rating**: HIGH / MEDIUM / LOW / NONE with explicit criteria tied to engagement levels (HIGH=RULED, MEDIUM=DISCUSSED, LOW=MENTIONED, NONE=NOT ADDRESSED)
+- **"What the case is actually about" section** in summarizer output — anchors context so main LLM can't misrepresent an interim freezing order as a property division ruling
+- **AI Analysis panel in DocViewer** — clicking a source now shows the summarizer's full analysis (engagement level, relevance, quotes) before the document text, in a collapsible indigo-highlighted section
+- **Summaries SSE event** — backend sends `summaries` event with per-document AI analysis to client; cached in `summaryCache` state for instant display
+- **Summarizer eval test suite** (`scripts/test_summarizer_eval.mjs`) — tests structural properties of summarizer output: correct engagement level, correct relevance rating, fabrication detection (forbidden phrases), interim status identification. 28/28 assertions passing.
+- **Year-based sorting** of summaries at code level — `extractYearFromDocId()` sorts newest first before sending to main LLM, so results naturally appear in chronological order without relying on LLM sorting
+
+### Changed
+- **Main LLM system prompt** rewritten with "INTERPRETING CASE SUMMARIES" block:
+  - Must present ALL summarized cases (not just HIGH), sorted by relevance then year
+  - MEDIUM cases presented prominently — court's analysis without final ruling is valuable for research
+  - LOW cases in "Related cases" section with honest explanation
+  - CRITICAL rule: "A response with 10 summaries but only 3 cases in the answer is WRONG"
+- **Sources section** now mandatory with per-case reasoning (not generic "High"/"Low" labels) — e.g., "(Court discussed Article 14 in obiter dicta but did not rule — case was about interim freezing orders)"
+- **Workflow instruction** changed from "send relevant doc_ids" to "send ALL doc_ids — do NOT pre-filter" to prevent main LLM from dropping cases before summarization
+- Summarizer prompt distinguishes party arguments from court decisions: "A party arguing something is NOT the court ruling on it"
+- Interim orders clarified: "issuing an interim order IS a ruling" for engagement level purposes
+
+### Fixed
+- **Main LLM fabricating court holdings** — e.g., stating "the court applied the presumption of one-third" when the court explicitly said it would not decide this issue. Root cause: old summarizer used vague "RELEVANCE: illustrates the application of Article 14" which main LLM inflated into fabricated holdings
+- **MEDIUM cases disappearing** — gap between "court ruled" (HIGH) and "only mentioned" (LOW) was too wide; cases with substantive court analysis (hearing both sides, referencing legal frameworks) fell into LOW and were dropped
+- **Random case ordering** — summaries were concatenated in Promise.all arrival order; now sorted by year descending at code level
+
 ## 2026-02-07
 
 ### Added
