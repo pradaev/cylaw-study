@@ -1,0 +1,12 @@
+---
+description: Governance for .mdc rules
+globs: ".cursor/rules/*.mdc"
+alwaysApply: true
+---
+
+# Rule Governance
+
+<rule>
+1. **Deviations**: Log date, author, rationale, PR in `DECISIONS.md`.
+2. **Review**: Audit quarterly. Remove stale rules.
+</rule>

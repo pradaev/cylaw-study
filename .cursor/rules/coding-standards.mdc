@@ -1,0 +1,18 @@
+---
+description: TypeScript & React Component Standards
+globs: "**/*.{ts,tsx}"
+alwaysApply: true
+---
+
+# Coding Standards
+
+<rule>
+1. **Component Structure**: Imports -> Types -> Component -> Hooks -> Render.
+2. **Imports**: External first, then internal (`@/lib/...`), then relative.
+3. **Naming**: PascalCase for components, camelCase for variables/functions.
+4. **Export**: Use `export function` (named exports) over `export default`.
+5. **TypeScript**: 
+   - Use `interface` for props/objects.
+   - No `any`. Use `unknown` or explicit types.
+   - Extract complex types to `types.ts` or near usage.
+</rule>

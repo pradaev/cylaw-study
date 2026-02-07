@@ -3,6 +3,17 @@
 ## 2026-02-07
 
 ### Added
+- Next.js frontend on Cloudflare Workers (Phase 1)
+- React chat UI with SSE streaming, document viewer, source cards
+- API routes: chat (function calling), doc viewer (R2), authentication
+- TypeScript LLM client supporting GPT-4o, o3-mini, Claude Sonnet 4
+- R2 document storage integration for 150K+ parsed case files
+- R2 upload script with parallel uploads and resume support
+- Cloudflare Workers deployment with wrangler
+- Updated system prompt for 15 courts and 150K+ cases
+
+### Changed
+- Changelog rule now includes .py files and matches existing format
 - Agentic chat interface (Perplexity-style) with function calling
 - LLM uses `search_cases` tool to decide when to search the database
 - Multi-model support: GPT-4o, o3-mini, GPT-4o-mini, Claude Sonnet 4

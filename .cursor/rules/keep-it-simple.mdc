@@ -1,0 +1,15 @@
+---
+description: Enforce simplicity (YAGNI, DRY, KISS)
+globs: "*"
+alwaysApply: true
+---
+
+# Simplicity Principles
+
+<rule>
+1. **Senior Mindset**: Code should be "obvious" and "boring". Avoid over-engineering while maintaining best practices.
+2. **Minimalism**: Implement minimal viable change. No future-proofing (YAGNI).
+3. **DRY**: Extract logic only if used ≥3 times or complex. Prefer pure helpers.
+4. **Abstraction**: Prefer duplication over wrong abstraction. Avoid "magic".
+5. **Process**: Split complex tasks. Commit on green tests.
+</rule>

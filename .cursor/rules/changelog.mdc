@@ -1,6 +1,6 @@
 ---
 description: Update CHANGELOG.md when making user-facing changes
-globs: "**/*.{ts,tsx}"
+globs: "**/*.{ts,tsx,py}"
 alwaysApply: false
 ---
 
@@ -13,11 +13,19 @@ alwaysApply: false
    - Bug fixes visible to users
    - Performance improvements users would notice
 
-2. **Format**: Add entries at the top of `CHANGELOG.md` (after the header):
+2. **Format**: Use existing CHANGELOG.md structure with dated sections and category headers:
    ```
-   - [YYYY-MM-DD] Category: Brief description of the change
+   ## YYYY-MM-DD
+
+   ### Added
+   - Description of new feature
+
+   ### Changed
+   - Description of change
+
+   ### Fixed
+   - Description of bug fix
    ```
-   Categories: `Feature`, `Improvement`, `Fix`, `UI`
 
 3. **Skip**: Don't log internal refactors, code cleanup, dev tooling, or backend-only changes unless they affect user experience.
 

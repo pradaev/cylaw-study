@@ -1,0 +1,18 @@
+---
+description: Next.js 15, Cloudflare, & UI Stack Rules
+globs: "**/*.{ts,tsx,js,jsx,toml,json}"
+alwaysApply: true
+---
+
+# Tech Stack
+
+<rule>
+1. **Next.js**: Use App Router, `@opennextjs/cloudflare`, Server Components (default), and Server Actions.
+   - Use `loading.tsx` and `error.tsx` for route states.
+   - Use `dynamic` imports for heavy client components.
+2. **Cloudflare**: `nodejs_compat` subset only (Buffer, events, AsyncLocalStorage). No `fs` writes.
+3. **Database**: HTTP/WebSocket capable only (Neon, D1, etc.). Use `process.env` or `CloudflareEnv`.
+4. **UI**: Shadcn UI + Tailwind. Icons: `lucide-react`. Don't modify UI primitives.
+5. **State**: URL (`nuqs`) for client shareable state. Zustand/Context sparingly.
+6. **Types**: Strict TS. Zod for validation. No `any`.
+</rule>

@@ -1,0 +1,14 @@
+---
+description: Validation & Decision Process
+globs: "*"
+alwaysApply: true
+---
+
+# Search & Validate
+
+<rule>
+1. **Search**: Query official docs ("Next.js 15", "Cloudflare Workers 2026", "Clerk", "Stripe") before coding. Use online search to validate solutions against 2026 best practices.
+2. **Sources**: Prioritize Official Docs > GitHub Issues (<12mo). Reject old tutorials (>18mo). Always include the current year (2026) in search queries for time-sensitive tech.
+3. **Log**: Record architectural decisions in `DECISIONS.md` (Date | Topic | Decision | Rationale).
+4. **Verify**: Don't guess APIs for beta/edge tech. Use the `web_search` tool to confirm current implementation patterns before proceeding.
+</rule>

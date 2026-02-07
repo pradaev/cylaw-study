@@ -1,0 +1,16 @@
+---
+description: Avoid common Next.js + Cloudflare Workers pitfalls
+globs: "**/*.{ts,tsx,js,jsx}"
+alwaysApply: true
+---
+
+# Common Mistakes
+
+<rule>
+1. **Edge Runtime Limits**: No `fs`, `path`, `process.cwd()`. Use HTTP/imports. Exception: `next.config.js`.
+2. **Client/Server Boundary**: Pass only serializable data to Client Components. No Server Actions in `useEffect`.
+3. **Hydration**: No `window`/`document` at top level. No random values during render. Use `useEffect`/`dynamic`.
+4. **Error Handling**: Don't swallow errors. Log them. Use `try/catch` in Server Actions.
+5. **UI/Styling**: Don't edit `components/ui/*`. specific files. Override via `className` or wrappers.
+6. **Images**: Cloudflare needs `loader` in `next.config.js` or `unoptimized: true`.
+</rule>

@@ -1,0 +1,14 @@
+---
+description: Standards for selecting third-party libraries
+globs: "*"
+alwaysApply: false
+---
+
+# Library Selection
+
+<rule>
+1. **Health**: High stars/downloads, recent release (<12mo). Veto archived projects.
+2. **Compatibility**: Must support Next.js 15+ (React 19) and Cloudflare Workers (Edge runtime).
+3. **Validation**: Check official docs or recent (<12mo) endorsements.
+4. **Process**: Log choice in `DECISIONS.md` with source/rationale.
+</rule>
