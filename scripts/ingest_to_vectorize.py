@@ -53,8 +53,8 @@ INPUT_DIR = PROJECT_ROOT / "data" / "cases_parsed"
 PROGRESS_FILE = PROJECT_ROOT / "data" / "vectorize_progress.json"
 
 # Tuning knobs
-EMBED_BATCH = 200       # texts per OpenAI call (~500 tok each = 100K tok/call)
-EMBED_THREADS = 10      # parallel OpenAI calls
+EMBED_BATCH = 200       # texts per OpenAI call (max 300K tokens/request)
+EMBED_THREADS = 10      # parallel OpenAI calls (429s handled by retry)
 UPLOAD_BATCH = 4000     # vectors per Vectorize call (max 5000)
 UPLOAD_THREADS = 5      # parallel Vectorize uploads
 MAX_RETRIES = 5
@@ -119,28 +119,26 @@ def upload_batch(vectors: list[dict], session: requests.Session) -> int:
 # ── OpenAI Embeddings ───────────────────────────────────────────────
 
 def embed_batch(client: OpenAI, texts: list[str]) -> list[list[float]]:
-    """Embed texts with retry + rate-limit pacing."""
+    """Embed texts with retry on 429 and other errors."""
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = client.embeddings.with_raw_response.create(
                 model=OPENAI_MODEL, input=texts,
             )
-            remaining = int(resp.headers.get("x-ratelimit-remaining-tokens", "999999"))
-            reset_s = _parse_reset(resp.headers.get("x-ratelimit-reset-tokens", "0s"))
-
             parsed = resp.parse()
-            embeddings = [item.embedding for item in parsed.data]
+            return [item.embedding for item in parsed.data]
 
-            # Pace if we're burning through the rate limit
-            if remaining < 50_000 and reset_s > 0:
-                time.sleep(min(reset_s, 5))
-
-            return embeddings
         except Exception as exc:
-            wait = min(2 ** attempt, 30)
-            logger.warning("OpenAI err (att %d): %s", attempt, str(exc)[:100])
-            time.sleep(wait)
-    raise RuntimeError("OpenAI embed failed")
+            err_str = str(exc)
+            if "429" in err_str or "rate" in err_str.lower():
+                wait = min(2 ** attempt * 3, 60)
+                time.sleep(wait)
+            else:
+                wait = min(2 ** attempt, 15)
+                logger.warning("OpenAI err (att %d): %s", attempt, err_str[:100])
+                time.sleep(wait)
+
+    raise RuntimeError("OpenAI embed failed after retries")
 
 
 def _parse_reset(value: str) -> float:
