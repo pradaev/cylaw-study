@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CyLaw Chat</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface2: #242734;
+            --border: #2e3140;
+            --text: #e4e4e7;
+            --text-dim: #8b8d98;
+            --accent: #6366f1;
+            --accent-hover: #818cf8;
+            --user-bg: #1e293b;
+            --success: #34d399;
+            --warning: #fbbf24;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Header ── */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+            flex-shrink: 0;
+        }
+        .header h1 { font-size: 1.1rem; font-weight: 700; }
+        .header-controls { display: flex; align-items: center; gap: 0.75rem; }
+        .header select, .header label {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.35rem 0.6rem;
+            font-size: 0.8rem;
+            color: var(--text);
+            cursor: pointer;
+        }
+        .toggle-label {
+            display: flex; align-items: center; gap: 0.3rem;
+            font-size: 0.8rem; color: var(--text-dim); cursor: pointer; user-select: none;
+            padding: 0.35rem 0.6rem;
+            border: 1px solid var(--border); border-radius: 6px;
+        }
+        .toggle-label:has(input:checked) { border-color: var(--accent); color: var(--text); }
+        .toggle-label input { display: none; }
+        .btn-new {
+            background: none; border: 1px solid var(--border); border-radius: 6px;
+            color: var(--text-dim); padding: 0.35rem 0.6rem; font-size: 0.8rem;
+            cursor: pointer;
+        }
+        .btn-new:hover { border-color: var(--accent); color: var(--text); }
+
+        /* ── Chat Area ── */
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+            scroll-behavior: smooth;
+        }
+        .chat-area::-webkit-scrollbar { width: 6px; }
+        .chat-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+        .welcome {
+            text-align: center;
+            padding: 4rem 1rem;
+            color: var(--text-dim);
+        }
+        .welcome h2 { font-size: 1.4rem; color: var(--text); margin-bottom: 0.5rem; }
+        .welcome p { font-size: 0.95rem; margin-bottom: 1.5rem; }
+        .examples { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; }
+        .examples button {
+            background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+            color: var(--text-dim); padding: 0.6rem 1rem; font-size: 0.85rem;
+            cursor: pointer; max-width: 280px; text-align: left; line-height: 1.4;
+        }
+        .examples button:hover { border-color: var(--accent); color: var(--text); }
+
+        /* ── Messages ── */
+        .message { margin-bottom: 1.5rem; max-width: 800px; margin-left: auto; margin-right: auto; }
+        .msg-user .msg-content {
+            background: var(--user-bg);
+            border-radius: 12px 12px 4px 12px;
+            padding: 0.75rem 1rem;
+            margin-left: 3rem;
+        }
+        .msg-assistant .msg-content {
+            padding: 0.5rem 0;
+        }
+        .msg-role {
+            font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
+            color: var(--text-dim); margin-bottom: 0.3rem; padding-left: 0.25rem;
+        }
+        .msg-text { line-height: 1.7; font-size: 0.95rem; }
+        .msg-text p { margin-bottom: 0.75rem; }
+        .msg-text strong { color: var(--accent-hover); }
+        .msg-text em { color: var(--text); }
+        .msg-text blockquote {
+            border-left: 3px solid var(--accent); padding-left: 1rem;
+            margin: 0.75rem 0; color: var(--text-dim);
+        }
+        .msg-text ol, .msg-text ul { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+        .msg-text li { margin-bottom: 0.3rem; }
+
+        /* ── Searching indicator ── */
+        .searching {
+            display: flex; align-items: center; gap: 0.6rem;
+            color: var(--text-dim); font-size: 0.85rem; padding: 0.5rem 0;
+        }
+        .search-spinner {
+            width: 16px; height: 16px;
+            border: 2px solid var(--border); border-top-color: var(--accent);
+            border-radius: 50%; animation: spin 0.7s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Source Cards ── */
+        .sources { margin-top: 1rem; }
+        .sources-title {
+            font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+            color: var(--text-dim); margin-bottom: 0.5rem;
+        }
+        .source-card {
+            background: var(--surface);
+            border: 1px solid var(--border); border-radius: 10px;
+            padding: 0.9rem 1rem; margin-bottom: 0.5rem;
+            display: flex; justify-content: space-between; align-items: flex-start;
+            cursor: pointer; transition: border-color 0.15s;
+        }
+        .source-card:hover { border-color: var(--accent); }
+        .source-info { flex: 1; min-width: 0; }
+        .source-title {
+            font-weight: 600; font-size: 0.85rem; line-height: 1.3;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .source-meta { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.2rem; }
+        .source-score {
+            font-size: 0.7rem; padding: 0.15rem 0.4rem; border-radius: 4px;
+            font-weight: 600; white-space: nowrap; margin-left: 0.5rem; flex-shrink: 0;
+        }
+        .score-high { background: #064e3b; color: var(--success); }
+        .score-mid { background: #422006; color: var(--warning); }
+        .score-low { background: var(--surface2); color: var(--text-dim); }
+
+        /* ── Cursor ── */
+        .typing-cursor {
+            display: inline-block; width: 2px; height: 1em;
+            background: var(--accent); animation: blink 0.8s step-end infinite;
+            vertical-align: text-bottom; margin-left: 1px;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* ── Input Bar ── */
+        .input-bar {
+            border-top: 1px solid var(--border);
+            background: var(--surface);
+            padding: 0.75rem 1.25rem;
+            flex-shrink: 0;
+        }
+        .input-wrap {
+            display: flex; gap: 0.5rem;
+            max-width: 800px; margin: 0 auto;
+        }
+        .input-wrap textarea {
+            flex: 1; background: var(--surface2); border: 1px solid var(--border);
+            border-radius: 10px; padding: 0.65rem 1rem; font-size: 0.95rem;
+            color: var(--text); outline: none; resize: none; line-height: 1.4;
+            font-family: inherit; min-height: 42px; max-height: 150px;
+        }
+        .input-wrap textarea:focus { border-color: var(--accent); }
+        .input-wrap button {
+            background: var(--accent); color: white; border: none;
+            border-radius: 10px; padding: 0 1.25rem; font-size: 1rem;
+            cursor: pointer; font-weight: 600; transition: background 0.15s;
+            align-self: flex-end; height: 42px;
+        }
+        .input-wrap button:hover { background: var(--accent-hover); }
+        .input-wrap button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* ── Document Viewer Modal ── */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.7); z-index: 1000;
+            justify-content: center; align-items: center; padding: 2rem;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-content {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 12px; width: 100%; max-width: 900px;
+            max-height: 90vh; display: flex; flex-direction: column;
+        }
+        .modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
+        }
+        .modal-header h3 {
+            font-size: 0.9rem; flex: 1; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap; margin-right: 1rem;
+        }
+        .modal-close {
+            background: none; border: 1px solid var(--border); border-radius: 6px;
+            color: var(--text-dim); padding: 0.3rem 0.7rem; cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .modal-close:hover { border-color: var(--accent); color: var(--text); }
+        .modal-body {
+            padding: 1.5rem; overflow-y: auto; font-size: 0.9rem; line-height: 1.8;
+            font-family: 'Georgia', 'Times New Roman', serif;
+        }
+        .modal-body p { margin-bottom: 0.75rem; }
+        .modal-body h1 { font-size: 1.2rem; margin-bottom: 1rem; font-family: inherit; }
+        .modal-body h2, .modal-body h3 { margin: 1rem 0 0.5rem; }
+        .modal-body hr { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
+        .modal-body a { color: var(--accent); }
+        .modal-body strong { color: var(--accent-hover); }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <h1>CyLaw Chat</h1>
+        <div class="header-controls">
+            <select id="model-select">
+                {% for key, label in models.items() %}
+                <option value="{{ key }}" {% if key == 'gpt-4o' %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+            <label class="toggle-label" title="Translate answers to English">
+                <input type="checkbox" id="translate-toggle" checked>
+                <span>EN</span>
+            </label>
+            <button class="btn-new" onclick="newChat()">New chat</button>
+        </div>
+    </div>
+
+    <!-- Chat Area -->
+    <div class="chat-area" id="chat-area">
+        <div class="welcome" id="welcome">
+            <h2>CyLaw Research Assistant</h2>
+            <p>Ask questions about 63,000+ Cypriot court cases in any language</p>
+            <div class="examples">
+                <button onclick="sendExample(this)">Find cases where court annulled administrative decisions under Article 146</button>
+                <button onclick="sendExample(this)">What is the precedent for unfair dismissal compensation in Cyprus?</button>
+                <button onclick="sendExample(this)">Βρες αποφάσεις σχετικά με ακύρωση διοικητικών πράξεων</button>
+                <button onclick="sendExample(this)">Compare how different courts have ruled on property rights disputes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Input Bar -->
+    <div class="input-bar">
+        <div class="input-wrap">
+            <textarea id="input" placeholder="Ask about Cypriot court cases..." rows="1"
+                      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+            <button id="send-btn" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <!-- Document Viewer Modal -->
+    <div class="modal-overlay" id="doc-modal" onclick="if(event.target===this)closeModal()">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Loading...</h3>
+                <button class="modal-close" onclick="closeModal()">Close</button>
+            </div>
+            <div class="modal-body" id="modal-body">Loading document...</div>
+        </div>
+    </div>
+
+    <script>
+    const chatArea = document.getElementById('chat-area');
+    const input = document.getElementById('input');
+    const sendBtn = document.getElementById('send-btn');
+    const welcome = document.getElementById('welcome');
+
+    let conversationHistory = [];
+    let isStreaming = false;
+
+    // Auto-resize textarea
+    input.addEventListener('input', () => {
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 150) + 'px';
+    });
+
+    function sendExample(btn) {
+        input.value = btn.textContent;
+        sendMessage();
+    }
+
+    function newChat() {
+        conversationHistory = [];
+        chatArea.innerHTML = '';
+        chatArea.appendChild(welcome);
+        welcome.style.display = 'block';
+    }
+
+    async function sendMessage() {
+        const text = input.value.trim();
+        if (!text || isStreaming) return;
+
+        welcome.style.display = 'none';
+        isStreaming = true;
+        sendBtn.disabled = true;
+        input.value = '';
+        input.style.height = 'auto';
+
+        // Add user message
+        conversationHistory.push({ role: 'user', content: text });
+        appendMessage('user', text);
+
+        // Create assistant message placeholder
+        const msgEl = appendMessage('assistant', '');
+        const textEl = msgEl.querySelector('.msg-text');
+        textEl.innerHTML = '<div class="searching"><div class="search-spinner"></div><span>Thinking...</span></div>';
+
+        const model = document.getElementById('model-select').value;
+        const translate = document.getElementById('translate-toggle').checked;
+
+        try {
+            const response = await fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    messages: conversationHistory,
+                    model: model,
+                    translate: translate,
+                }),
+            });
+
+            if (response.status === 401) {
+                window.location.href = '/';
+                return;
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let answerText = '';
+            let sourcesHtml = '';
+            let searchingShown = false;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // keep incomplete line
+
+                for (const line of lines) {
+                    if (line.startsWith('event: ')) {
+                        var currentEvent = line.slice(7);
+                    } else if (line.startsWith('data: ') && currentEvent) {
+                        const data = line.slice(6);
+                        handleEvent(currentEvent, data, textEl, msgEl);
+                        if (currentEvent === 'token') {
+                            answerText += data.replace(/\\n/g, '\n');
+                        }
+                        currentEvent = null;
+                    }
+                }
+            }
+
+            // Save assistant response to history
+            if (answerText) {
+                conversationHistory.push({ role: 'assistant', content: answerText });
+            }
+
+        } catch (err) {
+            textEl.innerHTML = `<span style="color:#f87171">Error: ${err.message}</span>`;
+        }
+
+        isStreaming = false;
+        sendBtn.disabled = false;
+        input.focus();
+    }
+
+    let currentAnswerText = '';
+
+    function handleEvent(event, data, textEl, msgEl) {
+        switch (event) {
+            case 'searching':
+                const searchData = JSON.parse(data);
+                textEl.innerHTML =
+                    `<div class="searching"><div class="search-spinner"></div>` +
+                    `<span>Searching: "${searchData.query}" (step ${searchData.step})</span></div>`;
+                break;
+
+            case 'sources':
+                const sources = JSON.parse(data);
+                let html = '<div class="sources"><div class="sources-title">Sources (' + sources.length + ' cases found)</div>';
+                for (const s of sources) {
+                    const scoreClass = s.score >= 60 ? 'score-high' : s.score >= 40 ? 'score-mid' : 'score-low';
+                    html += `<div class="source-card" onclick="viewDoc('${escapeAttr(s.doc_id)}')">
+                        <div class="source-info">
+                            <div class="source-title">${escapeHtml(s.title.slice(0, 120))}</div>
+                            <div class="source-meta">${escapeHtml(s.court)} &middot; ${escapeHtml(s.year)}</div>
+                        </div>
+                        <div class="source-score ${scoreClass}">${s.score}%</div>
+                    </div>`;
+                }
+                html += '</div>';
+                // Append sources after the text area
+                let sourcesContainer = msgEl.querySelector('.sources');
+                if (sourcesContainer) sourcesContainer.remove();
+                msgEl.querySelector('.msg-content').insertAdjacentHTML('beforeend', html);
+                break;
+
+            case 'token':
+                const token = data.replace(/\\n/g, '\n');
+                currentAnswerText += token;
+                textEl.innerHTML = marked.parse(currentAnswerText) + '<span class="typing-cursor"></span>';
+                chatArea.scrollTop = chatArea.scrollHeight;
+                break;
+
+            case 'done':
+                // Remove cursor, render final markdown
+                textEl.innerHTML = marked.parse(currentAnswerText);
+                currentAnswerText = '';
+                chatArea.scrollTop = chatArea.scrollHeight;
+                break;
+
+            case 'error':
+                textEl.innerHTML = `<span style="color:#f87171">Error: ${escapeHtml(data)}</span>`;
+                currentAnswerText = '';
+                break;
+        }
+    }
+
+    function appendMessage(role, text) {
+        const div = document.createElement('div');
+        div.className = `message msg-${role}`;
+        const roleLabel = role === 'user' ? 'You' : 'Assistant';
+        div.innerHTML = `
+            <div class="msg-role">${roleLabel}</div>
+            <div class="msg-content">
+                <div class="msg-text">${role === 'user' ? escapeHtml(text) : text}</div>
+            </div>
+        `;
+        chatArea.appendChild(div);
+        chatArea.scrollTop = chatArea.scrollHeight;
+        return div;
+    }
+
+    // ── Document Viewer ──
+
+    async function viewDoc(docId) {
+        const modal = document.getElementById('doc-modal');
+        const title = document.getElementById('modal-title');
+        const body = document.getElementById('modal-body');
+
+        modal.classList.add('active');
+        title.textContent = 'Loading...';
+        body.innerHTML = '<div class="searching"><div class="search-spinner"></div><span>Loading document...</span></div>';
+
+        try {
+            const resp = await fetch(`/doc?doc_id=${encodeURIComponent(docId)}`);
+            const data = await resp.json();
+            if (data.error) {
+                body.innerHTML = `<p style="color:#f87171">${data.error}</p>`;
+                return;
+            }
+            title.textContent = data.title || docId;
+            body.innerHTML = data.html;
+        } catch (err) {
+            body.innerHTML = `<p style="color:#f87171">Failed to load: ${err.message}</p>`;
+        }
+    }
+
+    function closeModal() {
+        document.getElementById('doc-modal').classList.remove('active');
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeModal();
+    });
+
+    // ── Helpers ──
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    function escapeAttr(str) {
+        return str.replace(/'/g, "\\'").replace(/"/g, '\\"');
+    }
+
+    // Focus input on load
+    input.focus();
+    </script>
+</body>
+</html>
