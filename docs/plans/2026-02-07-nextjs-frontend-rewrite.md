@@ -11,7 +11,7 @@ todos:
     content: Fix changelog.mdc to match existing CHANGELOG.md format, update globs to include .py
     status: done
   - id: r2-setup
-    content: Create R2 bucket 'cylaw-docs', write Python upload script, upload ~150K parsed .md files
+    content: Create R2 bucket 'cyprus-case-law-docs', write Python upload script, upload ~150K parsed .md files
     status: in_progress  # upload script written, upload NOT yet run
   - id: nextjs-init
     content: Initialize Next.js project in frontend/ with TypeScript, Tailwind, @opennextjs/cloudflare
@@ -73,7 +73,7 @@ flowchart TD
     subgraph cf [Cloudflare]
         Pages[Next.js on CF Pages]
         APIRoutes["API Routes (Workers)"]
-        R2[(R2 — cylaw-docs)]
+        R2[(R2 — cyprus-case-law-docs)]
         Vectorize[(Vectorize DB)]
         Pages --> APIRoutes
         APIRoutes --> R2
@@ -108,7 +108,7 @@ flowchart TD
 | API endpoints    | `web/app.py` (FastAPI Python)      | `frontend/app/api/` (Next.js API Routes, TypeScript) |
 | Retriever        | `rag/retriever.py` (ChromaDB)      | `frontend/lib/retriever.ts` (Vectorize binding)      |
 | LLM client       | `rag/llm_client.py`                | `frontend/lib/llm-client.ts`                         |
-| Document storage | Local filesystem                   | Cloudflare R2 (`cylaw-docs` bucket)                  |
+| Document storage | Local filesystem                   | Cloudflare R2 (`cyprus-case-law-docs` bucket)                  |
 | Vector DB        | ChromaDB (local files)             | Cloudflare Vectorize (cloud)                         |
 | Scraping tools   | `scraper/*.py`                     | **unchanged** (stays Python)                         |
 | Ingestion tools  | `rag/ingest.py`, `rag/chunker.py`  | **unchanged** (stays Python)                         |
@@ -179,7 +179,7 @@ Upload script (`rag/upload_to_r2.py`) is written but **not yet run**.
 
 ```bash
 # Via Cloudflare API or wrangler
-npx wrangler r2 bucket create cylaw-docs
+npx wrangler r2 bucket create cyprus-case-law-docs
 ```
 
 **2b. Run upload:**
@@ -220,7 +220,7 @@ npm install marked      # Markdown rendering
   "r2_buckets": [
     {
       "binding": "DOCS_BUCKET",
-      "bucket_name": "cylaw-docs"
+      "bucket_name": "cyprus-case-law-docs"
     }
   ]
   // Vectorize binding will be added in Phase 2:
@@ -368,7 +368,7 @@ npx opennextjs-cloudflare deploy
 
 ### Phase 1 — start now
 1. Fix `changelog.mdc`
-2. Create R2 bucket `cylaw-docs` + write and run upload script
+2. Create R2 bucket `cyprus-case-law-docs` + write and run upload script
 3. Initialize Next.js in `frontend/`
 4. Configure `wrangler.jsonc` (R2 binding only)
 5. Write `lib/types.ts`, `lib/llm-client.ts`

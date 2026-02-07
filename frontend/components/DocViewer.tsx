@@ -1,17 +1,25 @@
 "use client";
 
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useState, useMemo } from "react";
+import { marked } from "marked";
 
 interface DocViewerProps {
   docId: string | null;
   onClose: () => void;
+  summary?: string;
 }
 
-export function DocViewer({ docId, onClose }: DocViewerProps) {
+export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
   const [title, setTitle] = useState("Loading...");
   const [html, setHtml] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [summaryExpanded, setSummaryExpanded] = useState(true);
+
+  const summaryHtml = useMemo(() => {
+    if (!summary) return "";
+    return marked.parse(summary) as string;
+  }, [summary]);
 
   const fetchDoc = useCallback(async (id: string) => {
     setLoading(true);
@@ -44,6 +52,7 @@ export function DocViewer({ docId, onClose }: DocViewerProps) {
   useEffect(() => {
     if (docId) {
       fetchDoc(docId);
+      setSummaryExpanded(true);
     }
   }, [docId, fetchDoc]);
 
@@ -80,7 +89,38 @@ export function DocViewer({ docId, onClose }: DocViewerProps) {
         </div>
 
         {/* Body */}
-        <div className="p-5 overflow-y-auto text-sm leading-relaxed font-serif">
+        <div className="p-5 overflow-y-auto text-sm leading-relaxed">
+          {/* AI Summary section */}
+          {summary && (
+            <div className="mb-5">
+              <button
+                type="button"
+                onClick={() => setSummaryExpanded(!summaryExpanded)}
+                className="flex items-center gap-2 text-xs uppercase tracking-wider text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer mb-2"
+              >
+                <svg
+                  className={`w-3 h-3 transition-transform ${summaryExpanded ? "rotate-90" : ""}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+                AI Analysis
+              </button>
+              {summaryExpanded && (
+                <div className="bg-indigo-950/30 border border-indigo-500/20 rounded-lg px-4 py-3">
+                  <div
+                    className="prose prose-invert prose-sm max-w-none text-zinc-300 [&_strong]:text-zinc-100"
+                    dangerouslySetInnerHTML={{ __html: summaryHtml }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Document content */}
           {loading && (
             <div className="flex items-center gap-2 text-zinc-400">
               <div className="w-4 h-4 border-2 border-zinc-600 border-t-indigo-500 rounded-full animate-spin" />
@@ -92,7 +132,7 @@ export function DocViewer({ docId, onClose }: DocViewerProps) {
 
           {!loading && !error && (
             <div
-              className="doc-content prose prose-invert prose-sm max-w-none"
+              className="doc-content prose prose-invert prose-sm max-w-none font-serif"
               dangerouslySetInnerHTML={{ __html: html }}
             />
           )}

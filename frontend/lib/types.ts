@@ -15,13 +15,18 @@ export interface SearchResult {
 }
 
 export interface SSEEvent {
-  type: "token" | "sources" | "searching" | "error" | "done" | "usage";
+  type: "token" | "sources" | "searching" | "summaries" | "error" | "done" | "usage";
   data: unknown;
 }
 
 export interface SearchingData {
   query: string;
   step: number;
+}
+
+export interface SummaryEntry {
+  docId: string;
+  summary: string;
 }
 
 export interface ActivityEntry {

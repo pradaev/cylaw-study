@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { DocViewer } from "./DocViewer";
-import type { ChatMessage, SearchResult, UsageData, ActivityEntry } from "@/lib/types";
+import type { ChatMessage, SearchResult, UsageData, ActivityEntry, SummaryEntry } from "@/lib/types";
 import { MODELS } from "@/lib/types";
 
 interface AssistantState {
@@ -57,6 +57,9 @@ export function ChatArea() {
     isStreaming: false,
     usage: null,
   });
+
+  // Stores summarizer output per doc_id — survives across messages
+  const [summaryCache, setSummaryCache] = useState<Record<string, string>>({});
 
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -188,6 +191,17 @@ export function ChatArea() {
                     );
                     lastActivityLog = updated.activityLog;
                     return updated;
+                  });
+                  break;
+                }
+                case "summaries": {
+                  const entries = JSON.parse(data) as SummaryEntry[];
+                  setSummaryCache((prev) => {
+                    const next = { ...prev };
+                    for (const entry of entries) {
+                      next[entry.docId] = entry.summary;
+                    }
+                    return next;
                   });
                   break;
                 }
@@ -412,7 +426,11 @@ export function ChatArea() {
         </div>
       </div>
 
-      <DocViewer docId={docViewerId} onClose={() => setDocViewerId(null)} />
+      <DocViewer
+        docId={docViewerId}
+        onClose={() => setDocViewerId(null)}
+        summary={docViewerId ? summaryCache[docViewerId] : undefined}
+      />
     </>
   );
 }

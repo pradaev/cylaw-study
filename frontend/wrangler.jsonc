@@ -17,7 +17,7 @@
   "r2_buckets": [
     {
       "binding": "DOCS_BUCKET",
-      "bucket_name": "cylaw-docs"
+      "bucket_name": "cyprus-case-law-docs"
     }
   ]
   // Phase 2: Vectorize binding (uncomment when vectorization completes)

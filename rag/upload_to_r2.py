@@ -1,6 +1,6 @@
 """Upload parsed case documents to Cloudflare R2.
 
-Walks data/cases_parsed/ and uploads all .md files to the 'cylaw-docs'
+Walks data/cases_parsed/ and uploads all .md files to the 'cyprus-case-law-docs'
 R2 bucket using the S3-compatible API. Tracks progress and supports
 resuming interrupted uploads.
 
@@ -15,6 +15,8 @@ Usage:
     python -m rag.upload_to_r2 --workers 20        # parallel uploads
     python -m rag.upload_to_r2 --stats             # show progress stats
 """
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -36,13 +38,14 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CASES_DIR = PROJECT_ROOT / "data" / "cases_parsed"
 PROGRESS_FILE = PROJECT_ROOT / "data" / "r2_upload_progress.json"
-BUCKET_NAME = "cylaw-docs"
+BUCKET_NAME = "cyprus-case-law-docs"
 
-DEFAULT_WORKERS = 10
+DEFAULT_WORKERS = 50
 CONTENT_TYPE = "text/markdown; charset=utf-8"
+PROGRESS_SAVE_INTERVAL = 5000  # save progress every N files
 
 
-def get_s3_client():
+def get_s3_client(max_connections: int = 50):
     """Create an S3 client configured for Cloudflare R2."""
     account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
     access_key = os.environ.get("CLOUDFLARE_R2_ACCESS_KEY_ID")
@@ -65,7 +68,7 @@ def get_s3_client():
         region_name="auto",
         config=Config(
             retries={"max_attempts": 3, "mode": "adaptive"},
-            max_pool_connections=50,
+            max_pool_connections=max_connections,
         ),
     )
 
@@ -144,11 +147,12 @@ def upload_all(
         len(pending), workers, len(uploaded),
     )
 
-    s3_client = get_s3_client()
+    s3_client = get_s3_client(max_connections=workers)
     total = len(pending)
     done = 0
     errors = 0
     start_time = time.time()
+    last_save = 0
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
@@ -175,8 +179,11 @@ def upload_all(
                     "Progress: %d/%d (%.1f%%) | %.0f files/s | ETA: %.0fs | Errors: %d",
                     done, total, done / total * 100, rate, eta, errors,
                 )
-                # Save progress periodically
+
+            # Save progress less frequently for speed
+            if done - last_save >= PROGRESS_SAVE_INTERVAL or done == total:
                 save_progress(uploaded)
+                last_save = done
 
     save_progress(uploaded)
 

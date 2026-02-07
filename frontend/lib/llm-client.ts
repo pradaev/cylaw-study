@@ -65,24 +65,64 @@ SEARCH RULES:
 
 WORKFLOW — you have two tools:
 1. **search_cases**: Find relevant cases. Returns metadata (title, court, year, score) but NOT full text.
-2. **summarize_documents**: After search, call this with the doc_ids to get AI-generated summaries of each case focused on the user's question. This is how you read the cases.
+2. **summarize_documents**: After search, call this with doc_ids to get AI-generated summaries of each case focused on the user's question. This is how you read the cases.
 
 ALWAYS follow this sequence:
-1. Call search_cases with your query
+1. Call search_cases with your query (do multiple searches with different terms)
 2. Review the metadata results
-3. Call summarize_documents with the relevant doc_ids and your analysis instructions
-4. Use the summaries to compose your answer
+3. Call summarize_documents with ALL doc_ids from search results — do NOT pre-filter. You cannot judge relevance from metadata alone. The summarizer will determine actual relevance after reading the full text.
+4. Use the summaries to compose your answer — the summarizer provides a RELEVANCE RATING for each case. Use it to structure your response, but include ALL summarized cases.
+
+INTERPRETING CASE SUMMARIES — CRITICAL:
+The summaries you receive are AI-generated from court documents. You MUST follow these rules:
+1. Each summary contains a RELEVANCE RATING (HIGH/MEDIUM/LOW/NONE) and an engagement level (RULED/DISCUSSED/MENTIONED/NOT ADDRESSED). Use them to STRUCTURE your answer:
+   - HIGH (court RULED): Lead your answer with these. Describe the court's ruling in detail.
+   - MEDIUM (court DISCUSSED): These are highly valuable — the court substantively engaged with the topic (analyzed arguments, referenced legal frameworks, weighed evidence) even though it did not reach a final conclusion. Present these prominently after HIGH cases. Describe WHAT the court analyzed, what arguments were considered, and WHY a conclusion was not reached. Do NOT dismiss these as irrelevant — a court's detailed analysis without a final ruling is often more informative for legal research than a brief ruling.
+   - LOW (only MENTIONED): Include in a "Related cases" section. Briefly note what the case was about and how the topic was mentioned.
+   - NONE: Skip entirely.
+2. For engagement levels in each summary:
+   - RULED: You may describe the court's ruling using "the court held/decided/ruled".
+   - DISCUSSED: You may describe the court's analysis using "the court considered/examined/analyzed" but MUST NOT say "the court held/decided/ruled". Clearly state the conclusion was not reached.
+   - MENTIONED: You MUST NOT say the court engaged with the topic — only "the topic was referenced/mentioned".
+   - NOT ADDRESSED: Do NOT claim the case addresses the topic.
+3. NEVER fabricate court holdings. If the summary says the court "did not decide" or "did not address" a topic, you MUST NOT present the case as if the court decided it.
+4. Distinguish interim decisions from final decisions. An interim freezing order is NOT a ruling on property division.
+5. If none of the summarized cases have HIGH relevance, say so honestly, then present MEDIUM and LOW cases: "The search did not return cases where the court directly ruled on this question. However, the following cases contain substantive analysis that is relevant to the research:..."
+
+RESPONSE STRUCTURE:
+You MUST include EVERY summarized case in your answer — no exceptions. Organize by relevance first, then by year (newest first) within each level:
+1. Start with HIGH cases, newest first — these form the core of your answer. Discuss each in detail.
+2. Then MEDIUM cases, newest first — note that the court discussed but did not finally decide. Give a paragraph to each.
+3. Then LOW cases under a heading like "Also referenced" or "Related cases", newest first — for each, write 1-2 sentences explaining what the case was actually about and why the topic was only tangentially mentioned.
+4. For each case, indicate its relevance level naturally in the text (e.g., "In this case, the court directly ruled that..." for HIGH vs "This topic was raised by the applicant but not decided by the court in..." for LOW).
+5. Apply the same sorting (relevance then newest first) in the Sources section at the end.
+
+CRITICAL: Do NOT drop or skip any summarized case. Every case that was summarized MUST appear in both the answer body AND the Sources section. A response with 10 summaries but only 3 cases in the answer is WRONG.
 
 RESPONSE FORMAT:
 1. Answer in the SAME LANGUAGE as the user's question.
-2. Cite ALL relevant cases — do not limit to 2-3.
-3. When mentioning a case in your answer text, ALWAYS make the case name a clickable link using this format:
+2. When mentioning a case in your answer text, ALWAYS make the case name a clickable link using this format:
    [CASE_TITLE](/doc?doc_id=DOCUMENT_ID)
    Example: [E.R ν. P.R (Family Court, 2024)](/doc?doc_id=apofaseised/oik/2024/2320240403.md)
 4. NEVER use empty links like [title](#) or [title](). Every case reference must link to its document.
-5. End with a "Sources" section listing ALL cases with links.
-6. If a case is still pending or has no final ruling, state this clearly — do not present interim orders as final decisions.
-7. Suggest follow-up questions if helpful.
+5. If a case is still pending or has no final ruling, state this clearly — do not present interim orders as final decisions.
+6. Suggest follow-up questions if helpful.
+
+SOURCES SECTION — MANDATORY:
+End EVERY answer with a "Sources" section that lists ALL analyzed cases sorted from most to least relevant. Format each entry as:
+- [CASE_TITLE](/doc?doc_id=DOCUMENT_ID) — (reason for relevance)
+
+The "(reason for relevance)" MUST be a short explanation from the summarizer's findings — NOT a generic label like "High" or "Low". Use the actual reasoning. Examples:
+- (Court directly applied the 1/3 presumption and adjusted it based on evidence of unequal contribution)
+- (Court discussed Article 14 in obiter dicta but did not rule on the contribution percentage — case was about interim freezing orders)
+- (Article 14 was referenced by the applicant's counsel but the court did not engage with it — case concerned jurisdiction)
+- (Topic not addressed — case dealt with child custody, not property division)
+
+Rules for the Sources section:
+- List ALL cases that were summarized, including LOW relevance. Do NOT omit any.
+- Sort from most relevant to least relevant.
+- The reason must be HONEST — taken from the summary's actual findings. Do NOT inflate relevance.
+- Keep each reason to 1-2 sentences max.
 
 WHEN NOT TO SEARCH:
 - General legal knowledge questions — answer from your knowledge.
@@ -164,7 +204,7 @@ export type SearchFn = (
 export type FetchDocumentFn = (docId: string) => Promise<string | null>;
 
 interface SSEYield {
-  event: "searching" | "sources" | "summarizing" | "token" | "done" | "error" | "usage";
+  event: "searching" | "sources" | "summarizing" | "summaries" | "token" | "done" | "error" | "usage";
   data: unknown;
 }
 
@@ -204,6 +244,17 @@ function formatApiError(err: unknown): string {
   if (message.includes("401") || message.includes("auth")) return "API authentication error.";
   console.error("[LLM] API error:", message);
   return "An error occurred while processing your request. Please try again.";
+}
+
+// ── Sorting Helpers ────────────────────────────────────
+
+/**
+ * Extract the year from a doc_id path like "apofaseised/oik/2024/2320240403.md"
+ * or "aad/meros_1/2019/1-201903-E7-18PolEf.md". Falls back to 0 if not found.
+ */
+function extractYearFromDocId(docId: string): number {
+  const match = docId.match(/\/(\d{4})\//);
+  return match ? parseInt(match[1], 10) : 0;
 }
 
 // ── Summarizer Agent ───────────────────────────────────
@@ -264,19 +315,32 @@ Summarize this court decision in 400-700 words:
 1. CASE HEADER: Parties, court, date, case number (2 lines max)
 2. STATUS: Final decision (ΑΠΟΦΑΣΗ) or interim (ΕΝΔΙΑΜΕΣΗ ΑΠΟΦΑΣΗ)?
 3. FACTS: Brief background — what happened, who sued whom, what was claimed (3-4 sentences)
-4. COURT'S FINDINGS on "${focus}":
-   - What did the court say about this topic? Quote the key passage in original Greek.
-   - Translate the quote to English.
-   - If the court discussed this topic indirectly (e.g. in obiter dicta or as part of a broader ruling), still include it.
-   - If the court did not address this topic, write: "The court did not directly address ${focus} in this decision."
-5. OUTCOME: What did the court order? (dismissed/succeeded/interim order/remanded)
-6. RELEVANCE: One sentence explaining why this case is relevant to the research question.
+4. WHAT THE CASE IS ACTUALLY ABOUT: In 1-2 sentences, state the core legal issue the court decided (e.g., "interim freezing order", "property division", "child custody"). This may differ from the research question.
+5. COURT'S FINDINGS on "${focus}":
+   Pick ONE engagement level that best describes the court's treatment of the topic:
+   - RULED: The court analyzed the topic and reached a conclusion or ruling. Note: issuing or refusing an interim order IS a ruling — the court decided to grant/deny the order based on its analysis, even if the underlying dispute remains open.
+   - DISCUSSED: The court substantively engaged with the topic — heard arguments from both sides, analyzed legal provisions, referenced case law or doctrine — but did NOT reach a conclusion on this specific point (e.g., reserved for trial, left open, found it premature to decide).
+   - MENTIONED: The topic was only briefly referenced by a party or the court in passing, without substantive analysis.
+   - NOT ADDRESSED: The topic does not appear in the decision.
+   State the level, then:
+   - If RULED: Quote the court's conclusion in original Greek + English translation.
+   - If DISCUSSED: Describe what the court analyzed. Quote the most relevant passage in Greek + English. Clearly state what was NOT decided.
+   - If MENTIONED: Note the reference briefly. State the court did NOT engage with it.
+   - If NOT ADDRESSED: Write "NOT ADDRESSED."
+6. OUTCOME: What did the court order? (dismissed/succeeded/interim order/remanded)
+7. RELEVANCE RATING: Rate as HIGH / MEDIUM / LOW / NONE and explain in one sentence:
+   - HIGH: The court ruled on the research topic (level = RULED).
+   - MEDIUM: The court substantively discussed or analyzed the topic without reaching a final conclusion (level = DISCUSSED). This is still valuable for legal research — the court's reasoning, the arguments considered, and the legal framework referenced are informative even without a final ruling.
+   - LOW: The topic was only mentioned in passing without substantive analysis (level = MENTIONED).
+   - NONE: The topic does not appear in the decision (level = NOT ADDRESSED).
 
 CRITICAL RULES — VIOLATION IS UNACCEPTABLE:
 - ONLY state what is EXPLICITLY written in the text. If something is not stated, say "not addressed" or "not decided".
 - If the court says it has NOT decided an issue (e.g. "δεν κατέληξε", "δεν αποφασίστηκε"), you MUST report that the issue remains UNDECIDED. Do NOT present it as decided.
-- If this is an INTERIM decision (ενδιάμεση απόφαση, προσωρινό διάταγμα), state this clearly — interim orders are NOT final rulings.
+- If this is an INTERIM decision (ενδιάμεση απόφαση, προσωρινό διάταγμα), state this clearly — interim orders are NOT final rulings on the merits.
 - NEVER assume or infer a court's conclusion. If the text says "the court could not conclude which law applies", your summary MUST say "the court did not reach a conclusion on applicable law".
+- NEVER say the court "applied" a principle when it only "mentioned" or "referenced" it. A party arguing something is NOT the court ruling on it.
+- Distinguish between what a PARTY ARGUED and what the COURT DECIDED. Parties' arguments are not court findings.
 - Pay special attention to the LAST section of the document (after "[... middle section omitted ...]" if present, or the section starting with ΚΑΤΑΛΗΞΗ) — this contains the actual ruling.
 - Include at least one EXACT QUOTE from the decision (in Greek) with English translation.
 - A wrong summary is worse than no summary. When in doubt, quote the original text.
@@ -345,11 +409,25 @@ async function handleSummarizeDocuments(
       ),
   );
 
+  // Sort summaries by year descending (newest first) so the main LLM
+  // naturally presents them in chronological order without needing to re-sort.
+  const sortedResults = [...summaryResults].sort((a, b) => {
+    const yearA = extractYearFromDocId(a.docId);
+    const yearB = extractYearFromDocId(b.docId);
+    return yearB - yearA;
+  });
+
+  // Send individual summaries to the client for display in DocViewer
+  emit({
+    event: "summaries",
+    data: sortedResults.map((r) => ({ docId: r.docId, summary: r.summary })),
+  });
+
   let totalIn = 0;
   let totalOut = 0;
   const parts: string[] = [];
 
-  for (const result of summaryResults) {
+  for (const result of sortedResults) {
     totalIn += result.inputTokens;
     totalOut += result.outputTokens;
     parts.push(
