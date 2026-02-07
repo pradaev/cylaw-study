@@ -1,0 +1,239 @@
+<style>
+    .error-msg {
+        background: #2d1b1b;
+        border: 1px solid #5c2020;
+        border-radius: 8px;
+        padding: 1rem 1.25rem;
+        color: #f87171;
+        font-size: 0.9rem;
+    }
+
+    .answer-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .answer-card h3 {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--accent);
+        margin-bottom: 0.75rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .answer-text {
+        font-size: 0.95rem;
+        line-height: 1.75;
+        white-space: pre-wrap;
+        min-height: 2em;
+    }
+
+    .answer-cursor {
+        display: inline-block;
+        width: 2px;
+        height: 1.1em;
+        background: var(--accent);
+        animation: blink 0.8s step-end infinite;
+        vertical-align: text-bottom;
+        margin-left: 1px;
+    }
+
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .answer-loading {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        color: var(--text-dim);
+        font-size: 0.9rem;
+        padding: 0.5rem 0;
+    }
+
+    .answer-spinner {
+        width: 20px;
+        height: 20px;
+        border: 2.5px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+        flex-shrink: 0;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .sources-section h3 {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-dim);
+        margin-bottom: 0.75rem;
+    }
+
+    .source-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 1.25rem;
+        margin-bottom: 0.75rem;
+        transition: border-color 0.15s;
+    }
+
+    .source-card:hover {
+        border-color: var(--accent);
+    }
+
+    .source-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 0.5rem;
+    }
+
+    .source-title {
+        font-weight: 600;
+        font-size: 0.9rem;
+        line-height: 1.4;
+        flex: 1;
+        margin-right: 1rem;
+    }
+
+    .source-score {
+        font-size: 0.75rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    .score-high { background: #064e3b; color: #34d399; }
+    .score-mid { background: #422006; color: #fbbf24; }
+    .score-low { background: var(--surface2); color: var(--text-dim); }
+
+    .source-meta {
+        font-size: 0.8rem;
+        color: var(--text-dim);
+        margin-bottom: 0.5rem;
+    }
+
+    .source-meta span {
+        margin-right: 1rem;
+    }
+
+    .source-excerpt {
+        font-size: 0.85rem;
+        color: var(--text-dim);
+        line-height: 1.5;
+        max-height: 120px;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .source-excerpt::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 40px;
+        background: linear-gradient(transparent, var(--surface));
+    }
+</style>
+
+{% if error %}
+<div class="error-msg">{{ error }}</div>
+{% elif sources %}
+
+<!-- Answer area - will be filled by streaming -->
+<div class="answer-card">
+    <h3>Answer</h3>
+    <div id="answer-loading" class="answer-loading">
+        <div class="answer-spinner"></div>
+        <span>Generating answer from found cases...</span>
+    </div>
+    <div class="answer-text" id="answer-text" style="display:none;"></div>
+</div>
+
+<!-- Sources - shown immediately -->
+<div class="sources-section">
+    <h3>Sources ({{ sources|length }} cases found)</h3>
+
+    {% for group in sources %}
+    <div class="source-card">
+        <div class="source-header">
+            <div class="source-title">{{ group.title[:150] }}</div>
+            <div class="source-score {% if group.best_score >= 60 %}score-high{% elif group.best_score >= 40 %}score-mid{% else %}score-low{% endif %}">
+                {{ group.best_score }}%
+            </div>
+        </div>
+        <div class="source-meta">
+            <span>{{ group.court }}</span>
+            <span>{{ group.year }}</span>
+        </div>
+        {% if group.chunks %}
+        <div class="source-excerpt">{{ group.chunks[0].text[:400] }}</div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Start streaming the LLM answer -->
+<script>
+(function() {
+    const answerEl = document.getElementById('answer-text');
+    const searchId = "{{ search_id }}";
+    const query = encodeURIComponent("{{ query }}");
+    const provider = "{{ provider }}";
+    const translate = "{{ translate }}";
+
+    const loadingEl = document.getElementById('answer-loading');
+    const url = `/stream?search_id=${searchId}&query=${query}&provider=${provider}&translate=${translate}`;
+    const source = new EventSource(url);
+    let text = '';
+
+    source.onmessage = function(event) {
+        if (event.data === '[DONE]') {
+            source.close();
+            const cursor = answerEl.querySelector('.answer-cursor');
+            if (cursor) cursor.remove();
+            return;
+        }
+
+        // First token arrived — hide spinner, show text area
+        if (!text) {
+            loadingEl.style.display = 'none';
+            answerEl.style.display = 'block';
+        }
+
+        const token = event.data.replace(/\\n/g, '\n');
+        text += token;
+        answerEl.innerHTML = escapeHtml(text) + '<span class="answer-cursor"></span>';
+    };
+
+    source.onerror = function() {
+        source.close();
+        loadingEl.style.display = 'none';
+        answerEl.style.display = 'block';
+        const cursor = answerEl.querySelector('.answer-cursor');
+        if (cursor) cursor.remove();
+        if (!text) {
+            answerEl.textContent = 'Connection error. Please try again.';
+        }
+    };
+
+    function escapeHtml(str) {
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\n/g, '<br>');
+    }
+})();
+</script>
+
+{% endif %}

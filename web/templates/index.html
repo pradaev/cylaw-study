@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CyLaw Search — Cyprus Court Case Search</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface2: #242734;
+            --border: #2e3140;
+            --text: #e4e4e7;
+            --text-dim: #8b8d98;
+            --accent: #6366f1;
+            --accent-hover: #818cf8;
+            --success: #34d399;
+            --warning: #fbbf24;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2.5rem;
+        }
+
+        header h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.4rem;
+        }
+
+        header p {
+            color: var(--text-dim);
+            font-size: 0.95rem;
+        }
+
+        .search-form {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .search-input-wrap {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .search-input-wrap input[type="text"] {
+            flex: 1;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            font-size: 1rem;
+            color: var(--text);
+            outline: none;
+            transition: border-color 0.15s;
+        }
+
+        .search-input-wrap input[type="text"]:focus {
+            border-color: var(--accent);
+        }
+
+        .search-input-wrap button {
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+            white-space: nowrap;
+            min-width: 130px;
+        }
+
+        .search-input-wrap button:hover {
+            background: var(--accent-hover);
+        }
+
+        .search-input-wrap button:disabled {
+            opacity: 0.7;
+            cursor: wait;
+        }
+
+        .btn-loading { display: none; align-items: center; gap: 0.4rem; }
+        .htmx-request .btn-text { display: none; }
+        .htmx-request .btn-loading { display: inline-flex; }
+
+        .btn-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+
+        .filters {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .filters select,
+        .filters input {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.85rem;
+            color: var(--text);
+            outline: none;
+        }
+
+        .filters select { min-width: 180px; }
+        .filters input[type="number"] { width: 80px; }
+
+        .filters label {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+
+        .provider-toggle {
+            display: flex;
+            gap: 0;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .provider-toggle label {
+            padding: 0.5rem 0.9rem;
+            font-size: 0.8rem;
+            cursor: pointer;
+            color: var(--text-dim);
+            transition: all 0.15s;
+            user-select: none;
+        }
+
+        .provider-toggle input[type="radio"] { display: none; }
+        .provider-toggle input:checked + label {
+            background: var(--accent);
+            color: white;
+        }
+
+        .translate-toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            cursor: pointer;
+            user-select: none;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            transition: all 0.15s;
+        }
+
+        .translate-toggle:has(input:checked) {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+
+        .translate-toggle input { display: none; }
+
+        #results {
+            min-height: 100px;
+        }
+
+        .htmx-indicator {
+            display: none;
+        }
+
+        .htmx-request .htmx-indicator {
+            display: block;
+        }
+
+        .loading-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            display: flex;
+            align-items: flex-start;
+            gap: 1.25rem;
+        }
+
+        .spinner {
+            width: 28px;
+            height: 28px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .loading-steps .step {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            margin-bottom: 0.4rem;
+            opacity: 0.4;
+            transition: opacity 0.3s;
+        }
+
+        .loading-steps .step.active {
+            color: var(--text);
+            opacity: 1;
+        }
+
+        .examples {
+            margin-top: 2rem;
+            text-align: center;
+        }
+
+        .examples p {
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .examples button {
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-dim);
+            padding: 0.4rem 0.8rem;
+            font-size: 0.8rem;
+            cursor: pointer;
+            margin: 0.25rem;
+            transition: all 0.15s;
+        }
+
+        .examples button:hover {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 3rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border);
+            color: var(--text-dim);
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>CyLaw Search</h1>
+            <p>AI-powered search across 63,000+ Cypriot court decisions</p>
+        </header>
+
+        <form class="search-form"
+              hx-post="/search"
+              hx-target="#results"
+              hx-indicator="#loading"
+              hx-disabled-elt="#search-btn">
+
+            <div class="search-input-wrap">
+                <input type="text"
+                       name="query"
+                       id="query"
+                       placeholder="Ask a legal question in any language..."
+                       autocomplete="off"
+                       required>
+                <button type="submit" id="search-btn">
+                    <span class="btn-text">Search</span>
+                    <span class="btn-loading">
+                        <span class="btn-spinner"></span>
+                        Searching...
+                    </span>
+                </button>
+            </div>
+
+            <div class="filters">
+                <select name="court">
+                    {% for value, label in courts.items() %}
+                    <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+
+                <label>From</label>
+                <input type="number" name="year_from" placeholder="1961" min="1961" max="2026">
+
+                <label>To</label>
+                <input type="number" name="year_to" placeholder="2026" min="1961" max="2026">
+
+                <div class="provider-toggle">
+                    <input type="radio" name="provider" value="openai" id="prov-openai" checked>
+                    <label for="prov-openai">GPT-4o-mini</label>
+                    <input type="radio" name="provider" value="claude" id="prov-claude">
+                    <label for="prov-claude">Claude</label>
+                </div>
+
+                <label class="translate-toggle" title="Translate answer to English">
+                    <input type="checkbox" name="translate" checked>
+                    <span>EN translation</span>
+                </label>
+            </div>
+        </form>
+
+        <div id="results">
+            <div id="loading" class="htmx-indicator">
+                <div class="loading-card">
+                    <div class="spinner"></div>
+                    <div class="loading-steps">
+                        <p class="step active" id="step1">Searching through 63,000+ court cases...</p>
+                        <p class="step" id="step2">Analyzing relevant documents...</p>
+                        <p class="step" id="step3">Generating answer with citations...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="examples">
+                <p>Example queries:</p>
+                <button type="button" onclick="setQuery(this.textContent)">
+                    Ποιες αποφάσεις αφορούν διοικητικές προσφυγές κατά ΕΔΥ;
+                </button>
+                <button type="button" onclick="setQuery(this.textContent)">
+                    What cases deal with unfair dismissal in Cyprus?
+                </button>
+                <button type="button" onclick="setQuery(this.textContent)">
+                    Νομολογία για ακύρωση διοικητικών πράξεων
+                </button>
+            </div>
+        </div>
+
+        <footer>
+            <p>Data source: cylaw.org — Cyprus Legal Information Institute</p>
+        </footer>
+    </div>
+
+    <script>
+        function setQuery(text) {
+            document.getElementById('query').value = text;
+        }
+
+        // Animate loading steps
+        let stepTimer;
+        document.body.addEventListener('htmx:beforeRequest', function() {
+            const steps = document.querySelectorAll('.loading-steps .step');
+            steps.forEach(s => s.classList.remove('active'));
+            if (steps[0]) steps[0].classList.add('active');
+
+            let current = 0;
+            clearInterval(stepTimer);
+            stepTimer = setInterval(function() {
+                current++;
+                if (current < steps.length) {
+                    steps[current].classList.add('active');
+                }
+            }, 4000);
+        });
+
+        document.body.addEventListener('htmx:afterRequest', function() {
+            clearInterval(stepTimer);
+        });
+    </script>
+</body>
+</html>
