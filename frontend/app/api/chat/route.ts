@@ -1,27 +1,23 @@
 /**
- * Chat API route with SSE streaming.
+ * Chat API route with SSE streaming and multi-agent summarization.
  *
  * POST /api/chat
  * Body: { messages: ChatMessage[], model: string, translate: boolean }
  *
- * Returns a Server-Sent Events stream with events:
- *   - searching: { query, step }
- *   - sources: SearchResult[]
- *   - token: string
- *   - usage: UsageData
- *   - done: {}
- *   - error: string
- *
- * Authentication is handled by Cloudflare Access (Zero Trust).
- *
- * In development: uses local ChromaDB via rag/search_server.py
- * In production: uses Cloudflare Vectorize (Phase 2)
+ * Flow: Main LLM → search_cases → summarize_documents (parallel agents) → answer
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { chatStream, stubSearchFn } from "@/lib/llm-client";
-import { localSearchFn } from "@/lib/local-retriever";
+import { chatStream, stubSearchFn, setFetchDocumentFn } from "@/lib/llm-client";
+import { localSearchFn, localFetchDocument } from "@/lib/local-retriever";
 import type { ChatMessage } from "@/lib/types";
+
+// Wire up document fetching for the summarizer agents
+const isDev = process.env.NODE_ENV === "development" || process.env.NEXTJS_ENV === "development";
+
+if (isDev) {
+  setFetchDocumentFn(localFetchDocument);
+}
 
 export async function POST(request: NextRequest) {
   let body: { messages?: ChatMessage[]; model?: string; translate?: boolean };
@@ -40,10 +36,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No messages" }, { status: 400 });
   }
 
-  // Use local ChromaDB search in development, stub in production (until Phase 2)
-  const isDev = process.env.NODE_ENV === "development" || process.env.NEXTJS_ENV === "development";
   const searchFn = isDev ? localSearchFn : stubSearchFn;
-
   const stream = chatStream(messages, model, translate, searchFn);
 
   return new Response(stream, {

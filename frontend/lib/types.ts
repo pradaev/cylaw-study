@@ -24,6 +24,21 @@ export interface SearchingData {
   step: number;
 }
 
+export interface ActivityEntry {
+  type: "sending" | "thinking" | "searching" | "found" | "analyzing" | "writing";
+  text: string;
+  timestamp: number;
+}
+
+export interface DocumentMeta {
+  doc_id: string;
+  title: string;
+  court: string;
+  year: string;
+  score: number;
+  chunk_count: number;
+}
+
 /** Cost per 1M tokens in USD */
 interface ModelPricing {
   input: number;

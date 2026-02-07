@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { SearchResult } from "@/lib/types";
 import { COURT_NAMES } from "@/lib/types";
 
@@ -47,18 +48,35 @@ interface SourceListProps {
 }
 
 export function SourceList({ sources, onSourceClick }: SourceListProps) {
+  const [expanded, setExpanded] = useState(false);
+
   if (sources.length === 0) return null;
 
   return (
     <div className="mt-3">
-      <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-2">
-        Sources ({sources.length} cases found)
-      </div>
-      <div className="space-y-1.5">
-        {sources.map((s) => (
-          <SourceCard key={s.doc_id} source={s} onClick={onSourceClick} />
-        ))}
-      </div>
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer"
+      >
+        <svg
+          className={`w-3 h-3 transition-transform ${expanded ? "rotate-90" : ""}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+        Sources ({sources.length} cases)
+      </button>
+      {expanded && (
+        <div className="space-y-1.5 mt-2">
+          {sources.map((s) => (
+            <SourceCard key={s.doc_id} source={s} onClick={onSourceClick} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -3,13 +3,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { DocViewer } from "./DocViewer";
-import type { ChatMessage, SearchResult, SearchingData, UsageData } from "@/lib/types";
+import type { ChatMessage, SearchResult, UsageData, ActivityEntry } from "@/lib/types";
 import { MODELS } from "@/lib/types";
 
 interface AssistantState {
   content: string;
   sources: SearchResult[];
-  searching: SearchingData | null;
+  activityLog: ActivityEntry[];
   isStreaming: boolean;
   usage: UsageData | null;
 }
@@ -18,6 +18,7 @@ interface HistoryMessage {
   role: "user" | "assistant";
   content: string;
   sources?: SearchResult[];
+  activityLog?: ActivityEntry[];
   usage?: UsageData | null;
 }
 
@@ -28,10 +29,18 @@ const EXAMPLE_QUERIES = [
   "Compare how different courts have ruled on property rights disputes",
 ];
 
-function formatCost(costUsd: number): string {
-  if (costUsd < 0.001) return `$${costUsd.toFixed(5)}`;
-  if (costUsd < 0.01) return `$${costUsd.toFixed(4)}`;
-  return `$${costUsd.toFixed(3)}`;
+function addActivity(
+  prev: AssistantState,
+  type: ActivityEntry["type"],
+  text: string,
+): AssistantState {
+  return {
+    ...prev,
+    activityLog: [
+      ...prev.activityLog,
+      { type, text, timestamp: Date.now() },
+    ],
+  };
 }
 
 export function ChatArea() {
@@ -44,7 +53,7 @@ export function ChatArea() {
   const [assistant, setAssistant] = useState<AssistantState>({
     content: "",
     sources: [],
-    searching: null,
+    activityLog: [],
     isStreaming: false,
     usage: null,
   });
@@ -52,14 +61,12 @@ export function ChatArea() {
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll to bottom on new content
   useEffect(() => {
     if (chatRef.current) {
       chatRef.current.scrollTop = chatRef.current.scrollHeight;
     }
-  }, [messages, assistant.content]);
+  }, [messages, assistant.content, assistant.activityLog]);
 
-  // Auto-resize textarea
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       setInput(e.target.value);
@@ -74,39 +81,48 @@ export function ChatArea() {
       const messageText = text ?? input.trim();
       if (!messageText || isStreaming) return;
 
+      const selectedModel = MODELS[model];
+      const modelLabel = selectedModel?.label ?? model;
+
       setInput("");
       setIsStreaming(true);
 
-      // Add user message
       const userMsg: HistoryMessage = { role: "user", content: messageText };
       setMessages((prev) => [...prev, userMsg]);
 
-      // Build conversation history for API
       const apiMessages: ChatMessage[] = [
         ...messages.map((m) => ({ role: m.role, content: m.content })),
         { role: "user" as const, content: messageText },
       ];
 
-      // Reset assistant state
+      // Initialize with first activity entry
       setAssistant({
         content: "",
         sources: [],
-        searching: null,
+        activityLog: [
+          { type: "sending", text: `Sending to ${modelLabel}...`, timestamp: Date.now() },
+        ],
         isStreaming: true,
         usage: null,
       });
 
       let lastUsage: UsageData | null = null;
+      let lastActivityLog: ActivityEntry[] = [
+        { type: "sending", text: `Sending to ${modelLabel}...`, timestamp: Date.now() },
+      ];
 
       try {
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: apiMessages,
-            model,
-            translate,
-          }),
+          body: JSON.stringify({ messages: apiMessages, model, translate }),
+        });
+
+        // Update: request sent, model is thinking
+        setAssistant((prev) => {
+          const updated = addActivity(prev, "thinking", `${modelLabel} is analyzing your question...`);
+          lastActivityLog = updated.activityLog;
+          return updated;
         });
 
         const reader = response.body?.getReader();
@@ -117,6 +133,7 @@ export function ChatArea() {
         let answerText = "";
         let currentSources: SearchResult[] = [];
         let currentEvent = "";
+        let searchCount = 0;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -135,29 +152,58 @@ export function ChatArea() {
               switch (currentEvent) {
                 case "searching": {
                   const searchData = JSON.parse(data);
-                  setAssistant((prev) => ({
-                    ...prev,
-                    searching: searchData,
-                  }));
+                  searchCount++;
+                  setAssistant((prev) => {
+                    const updated = addActivity(
+                      prev,
+                      "searching",
+                      `Search #${searchData.step}: "${searchData.query}"`,
+                    );
+                    lastActivityLog = updated.activityLog;
+                    return updated;
+                  });
                   break;
                 }
                 case "sources": {
                   const sources: SearchResult[] = JSON.parse(data);
                   currentSources = sources;
-                  setAssistant((prev) => ({
-                    ...prev,
-                    sources,
-                    searching: null,
-                  }));
+                  setAssistant((prev) => {
+                    const updated = addActivity(
+                      { ...prev, sources },
+                      "found",
+                      `Found ${sources.length} relevant cases`,
+                    );
+                    lastActivityLog = updated.activityLog;
+                    return updated;
+                  });
+                  break;
+                }
+                case "summarizing": {
+                  const sumData = JSON.parse(data) as { count: number; focus: string };
+                  setAssistant((prev) => {
+                    const updated = addActivity(
+                      prev,
+                      "analyzing",
+                      `Analyzing ${sumData.count} cases in parallel...`,
+                    );
+                    lastActivityLog = updated.activityLog;
+                    return updated;
+                  });
                   break;
                 }
                 case "token": {
                   const token = data.replace(/\\n/g, "\n");
+                  if (!answerText) {
+                    setAssistant((prev) => {
+                      const updated = addActivity(prev, "writing", "Composing answer...");
+                      lastActivityLog = updated.activityLog;
+                      return updated;
+                    });
+                  }
                   answerText += token;
                   setAssistant((prev) => ({
                     ...prev,
                     content: answerText,
-                    searching: null,
                   }));
                   break;
                 }
@@ -173,18 +219,21 @@ export function ChatArea() {
                   setAssistant((prev) => ({
                     ...prev,
                     isStreaming: false,
-                    searching: null,
                   }));
                   break;
                 }
                 case "error": {
-                  answerText = `Error: ${data}`;
-                  setAssistant((prev) => ({
-                    ...prev,
-                    content: answerText,
-                    isStreaming: false,
-                    searching: null,
-                  }));
+                  const errorMsg = data.replace(/\\n/g, "\n");
+                  answerText = errorMsg;
+                  setAssistant((prev) => {
+                    const updated = addActivity(prev, "found", `Error: ${errorMsg.slice(0, 80)}`);
+                    lastActivityLog = updated.activityLog;
+                    return {
+                      ...updated,
+                      content: `**Something went wrong:** ${errorMsg}`,
+                      isStreaming: false,
+                    };
+                  });
                   break;
                 }
               }
@@ -193,7 +242,6 @@ export function ChatArea() {
           }
         }
 
-        // Save completed assistant message to history
         if (answerText) {
           setMessages((prev) => [
             ...prev,
@@ -201,25 +249,24 @@ export function ChatArea() {
               role: "assistant",
               content: answerText,
               sources: currentSources,
+              activityLog: lastActivityLog,
               usage: lastUsage,
             },
           ]);
           setAssistant({
             content: "",
             sources: [],
-            searching: null,
+            activityLog: [],
             isStreaming: false,
             usage: null,
           });
         }
       } catch (err) {
-        setAssistant({
+        setAssistant((prev) => ({
+          ...prev,
           content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
-          sources: [],
-          searching: null,
           isStreaming: false,
-          usage: null,
-        });
+        }));
       }
 
       setIsStreaming(false);
@@ -243,7 +290,7 @@ export function ChatArea() {
     setAssistant({
       content: "",
       sources: [],
-      searching: null,
+      activityLog: [],
       isStreaming: false,
       usage: null,
     });
@@ -253,7 +300,6 @@ export function ChatArea() {
 
   return (
     <>
-      {/* Header */}
       <header className="flex items-center justify-between px-5 py-3 border-b border-zinc-800 bg-[#1a1d27] shrink-0">
         <h1 className="text-base font-bold">Cyprus Case Law</h1>
         <div className="flex items-center gap-3">
@@ -295,7 +341,6 @@ export function ChatArea() {
         </div>
       </header>
 
-      {/* Chat Messages */}
       <div ref={chatRef} className="flex-1 overflow-y-auto px-5 py-6 scroll-smooth">
         {showWelcome && (
           <div className="text-center py-16 text-zinc-500">
@@ -320,25 +365,24 @@ export function ChatArea() {
           </div>
         )}
 
-        {/* Rendered history messages */}
         {messages.map((msg, i) => (
           <MessageBubble
             key={i}
             role={msg.role}
             content={msg.content}
             sources={msg.sources}
+            activityLog={msg.activityLog}
             usage={msg.usage}
             onSourceClick={setDocViewerId}
           />
         ))}
 
-        {/* Currently streaming assistant message */}
         {(assistant.isStreaming || assistant.content) && (
           <MessageBubble
             role="assistant"
             content={assistant.content}
             sources={assistant.sources}
-            searching={assistant.searching}
+            activityLog={assistant.activityLog}
             isStreaming={assistant.isStreaming}
             usage={assistant.usage}
             onSourceClick={setDocViewerId}
@@ -346,7 +390,6 @@ export function ChatArea() {
         )}
       </div>
 
-      {/* Input Bar */}
       <div className="border-t border-zinc-800 bg-[#1a1d27] px-5 py-3 shrink-0">
         <div className="flex gap-2 max-w-[800px] mx-auto">
           <textarea
@@ -369,7 +412,6 @@ export function ChatArea() {
         </div>
       </div>
 
-      {/* Document Viewer Modal */}
       <DocViewer docId={docViewerId} onClose={() => setDocViewerId(null)} />
     </>
   );

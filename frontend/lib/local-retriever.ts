@@ -4,31 +4,66 @@
  * Calls the Python search server (rag/search_server.py) running
  * on localhost:8100 to query the local ChromaDB vector store.
  *
- * Usage:
- *   1. Start the search server: python -m rag.search_server
- *   2. Start Next.js: npm run dev
- *   3. The chat will use real vector search via the local server
+ * - localSearchFn: returns metadata only (no full text) for search_cases tool
+ * - fetchDocumentText: fetches full text of a single document for summarization
  */
 
-import type { SearchResult } from "./types";
-import type { SearchFn } from "./llm-client";
+import type { SearchResult, DocumentMeta } from "./types";
+import type { SearchFn, FetchDocumentFn } from "./llm-client";
 
 const SEARCH_SERVER_URL = process.env.SEARCH_SERVER_URL ?? "http://localhost:8100";
 
+let healthCache: { ok: boolean; checkedAt: number } = { ok: false, checkedAt: 0 };
+
+async function isSearchServerUp(): Promise<boolean> {
+  if (Date.now() - healthCache.checkedAt < 30000) return healthCache.ok;
+  try {
+    const res = await fetch(`${SEARCH_SERVER_URL}/health`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    healthCache = { ok: res.ok, checkedAt: Date.now() };
+    return res.ok;
+  } catch {
+    healthCache = { ok: false, checkedAt: Date.now() };
+    return false;
+  }
+}
+
+/**
+ * Search — returns metadata only (doc_id, title, court, year, score).
+ * No full text is loaded at this stage.
+ */
 export const localSearchFn: SearchFn = async (
   query: string,
   court?: string,
   yearFrom?: number,
   yearTo?: number,
 ): Promise<SearchResult[]> => {
-  const params = new URLSearchParams({ query, n_results: "10" });
+  const serverUp = await isSearchServerUp();
+  if (!serverUp) {
+    console.error("[search] Search server is not running on port 8100");
+    return [{
+      doc_id: "",
+      title: "SEARCH UNAVAILABLE",
+      court: "",
+      year: "",
+      text: "The case search database is currently unavailable. Please tell the user that the search service is temporarily down and they should try again in a moment.",
+      score: 0,
+    }];
+  }
+
+  const params = new URLSearchParams({
+    query,
+    n_results: "20",
+    max_documents: "10",
+  });
   if (court) params.set("court", court);
   if (yearFrom) params.set("year_from", String(yearFrom));
   if (yearTo) params.set("year_to", String(yearTo));
 
   try {
     const res = await fetch(`${SEARCH_SERVER_URL}/search?${params}`, {
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!res.ok) {
@@ -36,10 +71,47 @@ export const localSearchFn: SearchFn = async (
       return [];
     }
 
-    const data = (await res.json()) as SearchResult[];
-    return data;
+    const docs = (await res.json()) as DocumentMeta[];
+    console.log(`[search] query="${query.slice(0, 50)}" → ${docs.length} docs`);
+
+    // Return as SearchResult with metadata only (text field = brief info)
+    return docs.map((d) => ({
+      doc_id: d.doc_id,
+      title: d.title,
+      court: d.court,
+      year: d.year,
+      score: d.score,
+      text: `[Metadata only — use summarize_documents to analyze full text]`,
+    }));
   } catch (err) {
-    console.error("[search] Local search server unavailable:", err instanceof Error ? err.message : err);
-    return [];
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[search] Search request failed:", message);
+    return [{
+      doc_id: "",
+      title: "SEARCH ERROR",
+      court: "",
+      year: "",
+      text: `Search failed: ${message}. Please tell the user there was a temporary search error.`,
+      score: 0,
+    }];
+  }
+};
+
+/**
+ * Fetch full text of a single document from the search server.
+ */
+export const localFetchDocument: FetchDocumentFn = async (
+  docId: string,
+): Promise<string | null> => {
+  try {
+    const res = await fetch(
+      `${SEARCH_SERVER_URL}/document?doc_id=${encodeURIComponent(docId)}`,
+      { signal: AbortSignal.timeout(15000) },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { text: string };
+    return data.text;
+  } catch {
+    return null;
   }
 };

@@ -1,12 +1,12 @@
 """Search API server for local development.
 
-Wraps the existing Retriever and exposes search endpoints
+Wraps the existing Retriever and exposes search + document endpoints
 that the Next.js frontend calls during local dev.
 
-Features:
-    - /search: chunk-level search with full document loading
-    - Groups chunks by document, loads full text for each unique case
-    - Returns full case texts for LLM analysis
+Endpoints:
+    GET /search     — semantic search, returns metadata only (no full text)
+    GET /document   — fetch full text of a single document by doc_id
+    GET /health     — server health check
 
 Usage:
     python -m rag.search_server
@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -53,6 +53,9 @@ def get_retriever(provider: str = None):
 
 def load_full_text(doc_id: str) -> Optional[str]:
     """Load full document text from disk."""
+    # Prevent directory traversal
+    if ".." in doc_id or doc_id.startswith("/"):
+        return None
     doc_path = CASES_PARSED_DIR / doc_id
     try:
         return doc_path.read_text(encoding="utf-8")
@@ -69,12 +72,11 @@ async def search(
     n_results: int = Query(20, description="Number of chunk results to fetch"),
     max_documents: int = Query(10, description="Max unique documents to return"),
 ):
-    """Search court cases and return full document texts.
+    """Search court cases — returns metadata only, no full text.
 
     1. Searches ChromaDB for relevant chunks (n_results)
     2. Groups chunks by document, ranks by best chunk score
-    3. Loads full text for top unique documents (max_documents)
-    4. Returns full case texts for LLM analysis
+    3. Returns top unique documents with metadata
     """
     retriever = get_retriever()
 
@@ -128,23 +130,28 @@ async def search(
     # Sort by score, take top max_documents
     docs = sorted(doc_map.values(), key=lambda d: d["score"], reverse=True)[:max_documents]
 
-    # Load full text for each document
-    for doc in docs:
-        full_text = load_full_text(doc["doc_id"])
-        if full_text:
-            doc["text"] = full_text
-            doc["text_length"] = len(full_text)
-        else:
-            doc["text"] = f"[Document text not available for {doc['doc_id']}]"
-            doc["text_length"] = 0
-
-    total_chars = sum(d.get("text_length", 0) for d in docs)
     logger.info(
-        "Search: query=%r → %d chunks → %d unique docs → %d chars total",
-        query[:60], len(results), len(docs), total_chars,
+        "Search: query=%r → %d chunks → %d unique docs",
+        query[:60], len(results), len(docs),
     )
 
     return docs
+
+
+@app.get("/document")
+async def get_document(
+    doc_id: str = Query(..., description="Document ID (relative path)"),
+):
+    """Fetch full text of a single document by doc_id."""
+    text = load_full_text(doc_id)
+    if text is None:
+        raise HTTPException(status_code=404, detail=f"Document not found: {doc_id}")
+
+    return {
+        "doc_id": doc_id,
+        "text": text,
+        "text_length": len(text),
+    }
 
 
 @app.get("/health")

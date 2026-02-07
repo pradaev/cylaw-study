@@ -2,15 +2,14 @@
 
 import { useMemo } from "react";
 import { marked } from "marked";
-import type { SearchResult, SearchingData, UsageData } from "@/lib/types";
+import type { SearchResult, UsageData, ActivityEntry } from "@/lib/types";
 import { SourceList } from "./SourceCard";
-import { SearchIndicator } from "./SearchIndicator";
 
 interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
   sources?: SearchResult[];
-  searching?: SearchingData | null;
+  activityLog?: ActivityEntry[];
   isStreaming?: boolean;
   usage?: UsageData | null;
   onSourceClick: (docId: string) => void;
@@ -22,11 +21,50 @@ function formatCost(costUsd: number): string {
   return `$${costUsd.toFixed(3)}`;
 }
 
+const ACTIVITY_ICONS: Record<ActivityEntry["type"], string> = {
+  sending: "\u2191",   // up arrow
+  thinking: "\u2022",  // bullet
+  searching: "\u25CB", // circle
+  found: "\u2713",     // checkmark
+  analyzing: "\u2026", // ellipsis
+  writing: "\u270E",   // pencil
+};
+
+function ActivityLog({ entries, isActive }: { entries: ActivityEntry[]; isActive: boolean }) {
+  if (entries.length === 0 && !isActive) return null;
+
+  return (
+    <div className="mb-3 space-y-1">
+      {entries.map((entry, i) => {
+        const isLast = i === entries.length - 1;
+        const showSpinner = isActive && isLast;
+        return (
+          <div
+            key={i}
+            className={`flex items-center gap-2 text-xs ${
+              isLast && isActive ? "text-zinc-300" : "text-zinc-600"
+            }`}
+          >
+            {showSpinner ? (
+              <div className="w-3 h-3 border-[1.5px] border-zinc-600 border-t-indigo-500 rounded-full animate-spin shrink-0" />
+            ) : (
+              <span className="w-3 text-center shrink-0 text-[10px]">
+                {ACTIVITY_ICONS[entry.type]}
+              </span>
+            )}
+            <span>{entry.text}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function MessageBubble({
   role,
   content,
   sources,
-  searching,
+  activityLog,
   isStreaming,
   usage,
   onSourceClick,
@@ -37,6 +75,8 @@ export function MessageBubble({
   }, [content]);
 
   const isUser = role === "user";
+  const showActivity = activityLog && activityLog.length > 0;
+  const isActivityActive = isStreaming === true && !content;
 
   return (
     <div className="mb-6 max-w-[800px] mx-auto">
@@ -51,24 +91,28 @@ export function MessageBubble({
               : "py-2"
           }
         >
-          {/* Searching indicator — only while actively searching */}
-          {searching && searching.step > 0 && (
-            <SearchIndicator query={searching.query} step={searching.step} />
+          {/* Activity log — shows what's happening step by step */}
+          {showActivity && (
+            <ActivityLog entries={activityLog} isActive={isActivityActive} />
           )}
 
-          {/* Thinking indicator — shown while waiting for first token */}
-          {isStreaming && !content && !searching && (
-            <div className="flex items-center gap-2.5 text-sm text-zinc-400 py-2">
-              <div className="w-4 h-4 border-2 border-zinc-600 border-t-indigo-500 rounded-full animate-spin" />
-              <span>Thinking...</span>
-            </div>
-          )}
-
-          {/* Message text */}
+          {/* Message text — doc links open in viewer */}
           {content && (
             <div
               className="msg-text text-[15px] leading-relaxed"
               dangerouslySetInnerHTML={{ __html: renderedHtml }}
+              onClick={(e) => {
+                const target = e.target as HTMLElement;
+                const anchor = target.closest("a");
+                if (anchor) {
+                  const href = anchor.getAttribute("href");
+                  if (href?.startsWith("/doc?doc_id=")) {
+                    e.preventDefault();
+                    const docId = new URL(href, "http://localhost").searchParams.get("doc_id");
+                    if (docId) onSourceClick(docId);
+                  }
+                }
+              }}
             />
           )}
 
@@ -78,7 +122,7 @@ export function MessageBubble({
           )}
         </div>
 
-        {/* Source cards */}
+        {/* Source cards — collapsed by default */}
         {sources && sources.length > 0 && (
           <SourceList sources={sources} onSourceClick={onSourceClick} />
         )}
