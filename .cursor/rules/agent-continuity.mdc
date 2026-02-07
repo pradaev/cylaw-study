@@ -1,0 +1,39 @@
+---
+description: Agent continuity — read project state on start, update on finish
+globs: "**/*"
+alwaysApply: true
+---
+
+# Agent Continuity
+
+<rule>
+## On Session Start (BEFORE any work)
+
+1. **Read `PROJECT_STATUS.md`** at the repo root. This is the single source of truth for:
+   - Current architecture and how components connect
+   - What works now (with file paths)
+   - What's next (prioritized task list)
+   - Gotchas discovered by previous agents
+   - What the last agent did (session log)
+
+2. Use this context to avoid rediscovering known state or repeating solved problems.
+
+## Before Session End (BEFORE final commit)
+
+1. **Update `PROJECT_STATUS.md`** to reflect what changed:
+   - Move completed items from "What's Next" to "What Works Now"
+   - Add new tasks discovered during the session to "What's Next"
+   - Update "Architecture" if any structural changes were made
+   - Update "Gotchas" if you discovered something non-obvious
+   - Add a session summary to "Last Session Log" with date, what was done, and any issues found
+   - Keep only the **last 3 sessions** in the log — remove older entries
+
+2. **Include `PROJECT_STATUS.md` in the git commit** alongside code changes.
+
+## Rules
+
+- Keep `PROJECT_STATUS.md` concise — under 120 lines. It is a quick-reference, not a novel.
+- Do NOT duplicate detailed docs. Reference files by path instead (e.g., "see `docs/PARSING_PIPELINE.md`").
+- Do NOT put secrets, API keys, or credentials in `PROJECT_STATUS.md`.
+- `README.md` is for humans/external readers. `PROJECT_STATUS.md` is for agents. Keep them separate.
+</rule>
