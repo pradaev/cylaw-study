@@ -1,0 +1,25 @@
+---
+description: Update CHANGELOG.md when making user-facing changes
+globs: "**/*.{ts,tsx}"
+alwaysApply: false
+---
+
+# Changelog Maintenance
+
+<rule>
+1. **When to Update**: Add entry to `CHANGELOG.md` when implementing user-facing changes:
+   - New features
+   - UI/UX improvements
+   - Bug fixes visible to users
+   - Performance improvements users would notice
+
+2. **Format**: Add entries at the top of `CHANGELOG.md` (after the header):
+   ```
+   - [YYYY-MM-DD] Category: Brief description of the change
+   ```
+   Categories: `Feature`, `Improvement`, `Fix`, `UI`
+
+3. **Skip**: Don't log internal refactors, code cleanup, dev tooling, or backend-only changes unless they affect user experience.
+
+4. **Purpose**: Entries are used for user announcements, so write descriptions from the user's perspective.
+</rule>
