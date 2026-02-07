@@ -109,11 +109,24 @@ def scrape_court(court_id: str, fetcher: Fetcher, output_dir: str) -> int:
 
 
 def _extract_year_from_url(url: str) -> str:
-    """Extract a 4-digit year from a URL string."""
+    """Extract a 4-digit year from a URL string.
+
+    Handles patterns like:
+        index_2026.html         → "2026"
+        index_pol_2005.html     → "2005"
+        2025/index.html         → "2025"
+        index_1.html            → "vol_1"  (RSCC volumes)
+    """
     import re
 
     m = re.search(r"(\d{4})", url)
-    return m.group(1) if m else "unknown"
+    if m:
+        return m.group(1)
+    # Fallback: extract short number for volume-based indexes (RSCC)
+    m = re.search(r"index_(\d+)\.html", url)
+    if m:
+        return f"vol_{m.group(1)}"
+    return "unknown"
 
 
 def scrape_updates(fetcher: Fetcher, output_dir: str) -> int:

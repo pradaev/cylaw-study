@@ -477,7 +477,7 @@ The site uses ISO-8859-7 (Greek) encoding. All parsers handle encoding detection
 
 The corpus contains **746,552 cross-references** between cases. These are preserved as Markdown links in the parsed files, enabling future graph analysis of case law citations.
 
-### Data Volumes
+### Data Volumes (current)
 
 | What | Count | Size |
 |------|-------|------|
@@ -487,3 +487,41 @@ The corpus contains **746,552 cross-references** between cases. These are preser
 | Parsed Markdown files | 63,256 | ~1.1 GB |
 | Total words | 167,735,575 | |
 | Vector chunks | ~773,316 | |
+
+---
+
+## Not Yet Scraped (Audit: 2026-02-07)
+
+The site sidebar (`/common/left.html`) lists 6 additional court databases not yet in our pipeline.
+Full details in `docs/DATABASE_AUDIT.md`.
+
+### Missing Court Databases
+
+| Court | court_id | URL pattern | Years | Cases |
+|-------|----------|-------------|-------|-------|
+| Areios Pagos | `areiospagos` | `/areiospagos/index_{year}.html` | 1968–2026 | **46,159** |
+| First Instance Courts | `apofaseised` | `/apofaseised/index_{cat}_{year}.html` | 2005–2026 | **37,840** |
+| JSC (English) | `jsc` | `/jsc/index_{year}.html` | 1964–1988 | **2,429** |
+| Supreme Constitutional (1960-63) | `rscc` | `/rscc/index_{vol}.html` | 1960–1963 | **122** |
+| Admin Court of Appeal | `administrativeCourtOfAppeal` | `/administrativeCourtOfAppeal/index_{year}.html` | 2025–2026 | **69** |
+| Juvenile Court | `juvenileCourt` | `/juvenileCourt/index_{year}.html` | 2023–2025 | **11** |
+| **Total missing** | | | | **86,630** |
+
+### Missing Legislation Databases
+
+| Database | URL | Approx. count |
+|----------|-----|---------------|
+| Consolidated Legislation | `/nomoi/` | ~3,995 laws |
+| Numbered Legislation | `/nomoi/arith_index.html` | ~14,406 laws |
+| Consolidated Procedural Rules | `/nomoi/kanon` | unknown |
+| Numbered Procedural Rules | `/nomoi/kanon/arith_index.html` | unknown |
+| Regulatory Admin Acts (KDP) | `/KDP` | 45,915 acts |
+| Rules of Civil Procedure | `/cpr.html` | unknown |
+| New Civil Procedure Rules | `/ncpr.html` | ~161 rules |
+
+### Notes for implementation
+
+- `areiospagos`, `jsc`, `administrativeCourtOfAppeal`, `juvenileCourt` use standard `index_{year}.html` pattern — can reuse existing `CourtConfig`
+- `apofaseised` uses category-based pattern `index_{cat}_{year}.html` with 5 categories (pol, poin, oik, enoik, erg) — needs `CourtConfig` extension
+- `rscc` uses volume-based pattern `index_{vol}.html` (1–5) — needs special handling
+- Legislation databases have a completely different structure (hierarchical catalogs, not `open.pl` links) — requires separate parser

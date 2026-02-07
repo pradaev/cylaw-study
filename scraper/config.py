@@ -53,6 +53,7 @@ class CourtConfig:
 # All courts on cylaw.org with their index structures.
 # Year ranges are based on what the site actually has (from our inventory).
 COURTS: list[CourtConfig] = [
+    # === Originally scraped courts ===
     CourtConfig(
         court_id="aad",
         base_index_url="/apofaseis/aad/",
@@ -108,6 +109,46 @@ COURTS: list[CourtConfig] = [
         year_index_pattern="index_{year}",
         year_start=2023,
         year_end=2023,
+    ),
+    # === Added 2026-02-07: previously missing courts ===
+    CourtConfig(
+        court_id="areiospagos",
+        base_index_url="/areiospagos/",
+        year_index_pattern="index_{year}",
+        year_start=1968,
+    ),
+    CourtConfig(
+        court_id="apofaseised",
+        base_index_url="/apofaseised/",
+        year_index_pattern="index_{year}",
+        year_start=2005,
+    ),
+    CourtConfig(
+        court_id="jsc",
+        base_index_url="/jsc/",
+        year_index_pattern="index_{year}",
+        year_start=1964,
+        year_end=1988,
+    ),
+    CourtConfig(
+        court_id="rscc",
+        base_index_url="/rscc/",
+        year_index_pattern="index_{year}",
+        year_start=1,
+        year_end=5,
+    ),
+    CourtConfig(
+        court_id="administrativeCourtOfAppeal",
+        base_index_url="/administrativeCourtOfAppeal/",
+        year_index_pattern="index_{year}",
+        year_start=2025,
+    ),
+    CourtConfig(
+        court_id="juvenileCourt",
+        base_index_url="/juvenileCourt/",
+        year_index_pattern="index_{year}",
+        year_start=2023,
+        year_end=2025,
     ),
 ]
 

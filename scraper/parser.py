@@ -40,6 +40,12 @@ _PATH_TO_COURT = {
     "/apofaseis/epa/": "epa",
     "/apofaseis/aap/": "aap",
     "/apofaseis/dioikitiko/": "dioikitiko",
+    "/areiospagos/": "areiospagos",
+    "/apofaseised/": "apofaseised",
+    "/jsc/": "jsc",
+    "/rscc/": "rscc",
+    "/administrativeCourtOfAppeal/": "administrativeCourtOfAppeal",
+    "/juvenileCourt/": "juvenileCourt",
 }
 
 
@@ -61,7 +67,7 @@ def _detect_year(file_path: str) -> str:
 
 def _extract_file_path(href: str) -> str:
     """Extract the file= parameter from an open.pl URL."""
-    m = re.search(r"file=([^&\"'\s]+)", href)
+    m = re.search(r"file=([^\s&\"']+)", href)
     if m:
         return m.group(1)
     return ""
@@ -90,8 +96,12 @@ def parse_court_main_index(html: str, court_id: str) -> list[str]:
 
     for a in soup.find_all("a", href=True):
         href = a["href"]
-        # Match patterns like index_2026.html or 2025/index.html
-        if re.search(r"index_\d{4}\.html", href) or re.search(
+        # Match patterns:
+        #   index_2026.html          — standard year index
+        #   index_pol_2005.html      — apofaseised category+year index
+        #   index_1.html             — rscc volume index
+        #   2025/index.html          — epa/aap year subdirectory
+        if re.search(r"index_\w*\d+\.html", href) or re.search(
             r"/\d{4}/index\.html", href
         ):
             if href not in seen:
