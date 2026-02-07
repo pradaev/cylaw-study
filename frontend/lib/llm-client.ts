@@ -15,7 +15,7 @@ import type { ChatMessage, ModelConfig, SearchResult, UsageData } from "./types"
 import { MODELS } from "./types";
 
 const MAX_TOOL_ROUNDS = 7;
-const SUMMARIZER_MODEL = "gpt-4o-mini";
+const SUMMARIZER_MODEL = "gpt-4o";
 const SUMMARIZER_MAX_TOKENS = 2000;
 
 // ── System Prompt ──────────────────────────────────────
@@ -58,9 +58,10 @@ SEARCH TRANSFORMATION EXAMPLES:
 
 SEARCH RULES:
 1. ALWAYS search using Cypriot Greek legal formulations.
-2. Do multiple searches with different phrasings.
+2. Do multiple searches with DIFFERENT query texts covering different angles or synonyms. NEVER repeat the same query — each search must use distinct terms or phrasing.
 3. Also search in English when relevant (JSC collection, older Supreme Court).
-4. Do NOT filter by court unless the user explicitly asks for a specific court.
+4. NEVER use the court filter parameter. The search returns relevant cases from ALL courts automatically. If the user mentions specific courts, include those terms in your query TEXT instead.
+5. Use year_from/year_to filters when the user specifies a time range.
 
 WORKFLOW — you have two tools:
 1. **search_cases**: Find relevant cases. Returns metadata (title, court, year, score) but NOT full text.
@@ -75,9 +76,13 @@ ALWAYS follow this sequence:
 RESPONSE FORMAT:
 1. Answer in the SAME LANGUAGE as the user's question.
 2. Cite ALL relevant cases — do not limit to 2-3.
-3. End with a "Sources" section with clickable links:
-   - [CASE_TITLE (Court, Year)](/doc?doc_id=DOCUMENT_ID)
-4. Suggest follow-up questions if helpful.
+3. When mentioning a case in your answer text, ALWAYS make the case name a clickable link using this format:
+   [CASE_TITLE](/doc?doc_id=DOCUMENT_ID)
+   Example: [E.R ν. P.R (Family Court, 2024)](/doc?doc_id=apofaseised/oik/2024/2320240403.md)
+4. NEVER use empty links like [title](#) or [title](). Every case reference must link to its document.
+5. End with a "Sources" section listing ALL cases with links.
+6. If a case is still pending or has no final ruling, state this clearly — do not present interim orders as final decisions.
+7. Suggest follow-up questions if helpful.
 
 WHEN NOT TO SEARCH:
 - General legal knowledge questions — answer from your knowledge.
@@ -101,17 +106,7 @@ const SEARCH_TOOL: OpenAI.ChatCompletionTool = {
       properties: {
         query: {
           type: "string",
-          description: "Search query in Cypriot Greek legal terminology.",
-        },
-        court: {
-          type: "string",
-          description: "Filter by court ID. Only use if user explicitly requests a specific court.",
-          enum: [
-            "aad", "supreme", "courtOfAppeal", "supremeAdministrative",
-            "administrative", "administrativeIP", "epa", "aap", "dioikitiko",
-            "areiospagos", "apofaseised", "jsc", "rscc",
-            "administrativeCourtOfAppeal", "juvenileCourt",
-          ],
+          description: "Search query in Cypriot Greek legal terminology. Include court names in the query text if needed (e.g., 'Εφετείο', 'Ανώτατο Δικαστήριο'). Each search must use different query text — never repeat the same query.",
         },
         year_from: { type: "integer", description: "Filter: from this year" },
         year_to: { type: "integer", description: "Filter: up to this year" },
@@ -213,6 +208,45 @@ function formatApiError(err: unknown): string {
 
 // ── Summarizer Agent ───────────────────────────────────
 
+/**
+ * Extract the actual court decision text, stripping references and metadata.
+ * Then smart-truncate if still too long: keep beginning + end (where ruling is).
+ */
+function extractDecisionText(text: string, maxChars: number): string {
+  // Find "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ:" marker — everything after it is the decision
+  const decisionMarker = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ:";
+  const markerIdx = text.indexOf(decisionMarker);
+
+  let decisionText: string;
+  let title = "";
+
+  // Extract title (first line)
+  const firstNewline = text.indexOf("\n");
+  if (firstNewline > 0) {
+    title = text.slice(0, firstNewline).trim() + "\n\n";
+  }
+
+  if (markerIdx !== -1) {
+    // Found marker — take title + everything after the marker
+    decisionText = title + text.slice(markerIdx + decisionMarker.length).trim();
+  } else {
+    // No marker (e.g. Areios Pagos) — use full text
+    decisionText = text;
+  }
+
+  // If it fits, return as-is
+  if (decisionText.length <= maxChars) return decisionText;
+
+  // Still too long — keep beginning (facts/parties) + end (ruling/conclusion)
+  // Give MORE to the tail because the court's actual ruling is always at the end
+  const headSize = Math.floor(maxChars * 0.35);
+  const tailSize = maxChars - headSize - 200;
+
+  return decisionText.slice(0, headSize) +
+    "\n\n[... middle section omitted — see full document for complete text ...]\n\n" +
+    decisionText.slice(-tailSize);
+}
+
 async function summarizeDocument(
   client: OpenAI,
   docId: string,
@@ -220,28 +254,40 @@ async function summarizeDocument(
   focus: string,
   userQuery: string,
 ): Promise<{ docId: string; summary: string; inputTokens: number; outputTokens: number }> {
-  const systemPrompt = `You are a legal document summarizer for Cypriot court cases written in Cypriot Greek.
+  const systemPrompt = `You are a legal analyst summarizing a Cypriot court decision for a lawyer's research.
 
-User's research question: "${userQuery}"
+The lawyer's research question: "${userQuery}"
 Analysis focus: "${focus}"
 
-Summarize this court decision in 500-800 words, covering:
-1. Case parties, court, and date
-2. Key legal issues raised
-3. Court's reasoning and holdings RELEVANT to the research question
-4. Key legal principles established or applied
-5. Outcome (appeal dismissed/succeeded, recourse dismissed/succeeded)
+Summarize this court decision in 400-700 words:
 
-IMPORTANT:
-- Include EXACT QUOTES of the most important legal passages (in the original Greek)
-- Focus on aspects relevant to "${focus}"
-- Document ID for citations: ${docId}`;
+1. CASE HEADER: Parties, court, date, case number (2 lines max)
+2. STATUS: Final decision (ΑΠΟΦΑΣΗ) or interim (ΕΝΔΙΑΜΕΣΗ ΑΠΟΦΑΣΗ)?
+3. FACTS: Brief background — what happened, who sued whom, what was claimed (3-4 sentences)
+4. COURT'S FINDINGS on "${focus}":
+   - What did the court say about this topic? Quote the key passage in original Greek.
+   - Translate the quote to English.
+   - If the court discussed this topic indirectly (e.g. in obiter dicta or as part of a broader ruling), still include it.
+   - If the court did not address this topic, write: "The court did not directly address ${focus} in this decision."
+5. OUTCOME: What did the court order? (dismissed/succeeded/interim order/remanded)
+6. RELEVANCE: One sentence explaining why this case is relevant to the research question.
+
+CRITICAL RULES — VIOLATION IS UNACCEPTABLE:
+- ONLY state what is EXPLICITLY written in the text. If something is not stated, say "not addressed" or "not decided".
+- If the court says it has NOT decided an issue (e.g. "δεν κατέληξε", "δεν αποφασίστηκε"), you MUST report that the issue remains UNDECIDED. Do NOT present it as decided.
+- If this is an INTERIM decision (ενδιάμεση απόφαση, προσωρινό διάταγμα), state this clearly — interim orders are NOT final rulings.
+- NEVER assume or infer a court's conclusion. If the text says "the court could not conclude which law applies", your summary MUST say "the court did not reach a conclusion on applicable law".
+- Pay special attention to the LAST section of the document (after "[... middle section omitted ...]" if present, or the section starting with ΚΑΤΑΛΗΞΗ) — this contains the actual ruling.
+- Include at least one EXACT QUOTE from the decision (in Greek) with English translation.
+- A wrong summary is worse than no summary. When in doubt, quote the original text.
+
+Document ID: ${docId}`;
 
   const response = await client.chat.completions.create({
     model: SUMMARIZER_MODEL,
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: fullText.slice(0, 120000) }, // ~30K tokens max per doc
+      { role: "user", content: extractDecisionText(fullText, 80000) },
     ],
     temperature: 0.1,
     max_tokens: SUMMARIZER_MAX_TOKENS,
@@ -314,7 +360,7 @@ async function handleSummarizeDocuments(
     );
   }
 
-  const summarizerCost = (totalIn / 1_000_000) * 0.15 + (totalOut / 1_000_000) * 0.6;
+  const summarizerCost = (totalIn / 1_000_000) * 2.5 + (totalOut / 1_000_000) * 10;
   console.log(
     `[Summarizer] ${summaryResults.length} docs, in=${totalIn} out=${totalOut} cost=$${summarizerCost.toFixed(4)}`,
   );
@@ -481,8 +527,8 @@ async function streamOpenAI(
     }
 
     const mainCost = calculateCost(modelCfg, totalInputTokens, totalOutputTokens);
-    const summarizerCost = (summarizerInputTokens / 1_000_000) * 0.15 +
-                           (summarizerOutputTokens / 1_000_000) * 0.6;
+    const summarizerCost = (summarizerInputTokens / 1_000_000) * 2.5 +
+                           (summarizerOutputTokens / 1_000_000) * 10;
     const totalCost = mainCost + summarizerCost;
 
     console.log(
@@ -619,8 +665,8 @@ async function streamClaude(
     totalInputTokens += finalMessage.usage.input_tokens;
 
     const mainCost = calculateCost(modelCfg, totalInputTokens, totalOutputTokens);
-    const summarizerCost = (summarizerInputTokens / 1_000_000) * 0.15 +
-                           (summarizerOutputTokens / 1_000_000) * 0.6;
+    const summarizerCost = (summarizerInputTokens / 1_000_000) * 2.5 +
+                           (summarizerOutputTokens / 1_000_000) * 10;
 
     emit({
       event: "usage",
