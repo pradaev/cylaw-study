@@ -34,6 +34,7 @@ export interface ModelConfig {
   provider: "openai" | "anthropic";
   modelId: string;
   label: string;
+  contextWindow: number;
   pricing: ModelPricing;
 }
 
@@ -43,31 +44,29 @@ export interface UsageData {
   outputTokens: number;
   totalTokens: number;
   costUsd: number;
+  documentsAnalyzed?: number;
 }
 
 export const MODELS: Record<string, ModelConfig> = {
   "gpt-4o": {
     provider: "openai",
     modelId: "gpt-4o",
-    label: "GPT-4o",
+    label: "GPT-4o (128K)",
+    contextWindow: 128000,
     pricing: { input: 2.5, output: 10 },
   },
   "o3-mini": {
     provider: "openai",
     modelId: "o3-mini",
-    label: "o3-mini",
+    label: "o3-mini (200K)",
+    contextWindow: 200000,
     pricing: { input: 1.1, output: 4.4 },
-  },
-  "gpt-4o-mini": {
-    provider: "openai",
-    modelId: "gpt-4o-mini",
-    label: "GPT-4o-mini",
-    pricing: { input: 0.15, output: 0.6 },
   },
   claude: {
     provider: "anthropic",
     modelId: "claude-sonnet-4-20250514",
-    label: "Claude Sonnet 4",
+    label: "Claude Sonnet 4 (200K)",
+    contextWindow: 200000,
     pricing: { input: 3, output: 15 },
   },
 };

@@ -1,7 +1,12 @@
-"""Minimal search API server for local development.
+"""Search API server for local development.
 
-Wraps the existing Retriever and exposes a single /search endpoint
-that the Next.js frontend can call during local dev.
+Wraps the existing Retriever and exposes search endpoints
+that the Next.js frontend calls during local dev.
+
+Features:
+    - /search: chunk-level search with full document loading
+    - Groups chunks by document, loads full text for each unique case
+    - Returns full case texts for LLM analysis
 
 Usage:
     python -m rag.search_server
@@ -9,19 +14,22 @@ Usage:
 """
 
 import argparse
-import json
 import logging
 import os
+from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 import uvicorn
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CASES_PARSED_DIR = PROJECT_ROOT / "data" / "cases_parsed"
 
 app = FastAPI(title="Cyprus Case Law Search API")
 
@@ -43,15 +51,31 @@ def get_retriever(provider: str = None):
     return _retriever
 
 
+def load_full_text(doc_id: str) -> Optional[str]:
+    """Load full document text from disk."""
+    doc_path = CASES_PARSED_DIR / doc_id
+    try:
+        return doc_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return None
+
+
 @app.get("/search")
 async def search(
     query: str = Query(..., description="Search query"),
     court: str = Query(None, description="Filter by court ID"),
     year_from: int = Query(None, description="Filter: cases from this year"),
     year_to: int = Query(None, description="Filter: cases up to this year"),
-    n_results: int = Query(10, description="Number of results"),
+    n_results: int = Query(20, description="Number of chunk results to fetch"),
+    max_documents: int = Query(10, description="Max unique documents to return"),
 ):
-    """Search court cases by semantic similarity."""
+    """Search court cases and return full document texts.
+
+    1. Searches ChromaDB for relevant chunks (n_results)
+    2. Groups chunks by document, ranks by best chunk score
+    3. Loads full text for top unique documents (max_documents)
+    4. Returns full case texts for LLM analysis
+    """
     retriever = get_retriever()
 
     try:
@@ -63,14 +87,12 @@ async def search(
             year_to=year_to,
         )
     except ValueError:
-        # ChromaDB $gte/$lte fail on string 'year' field — retry without year filters
         logger.warning("Year filter failed (string field), retrying without year filter")
         results = retriever.search(
             query=query,
             n_results=n_results,
             court=court,
         )
-        # Manual year filtering on results
         if year_from or year_to:
             filtered = []
             for r in results:
@@ -86,17 +108,43 @@ async def search(
                 filtered.append(r)
             results = filtered
 
-    return [
-        {
-            "doc_id": r.doc_id,
-            "title": r.title,
-            "court": r.court,
-            "year": r.year,
-            "text": r.text,
-            "score": r.score,
-        }
-        for r in results
-    ]
+    # Group by document, keep best score per document
+    doc_map: dict[str, dict] = {}
+    for r in results:
+        if r.doc_id not in doc_map:
+            doc_map[r.doc_id] = {
+                "doc_id": r.doc_id,
+                "title": r.title,
+                "court": r.court,
+                "year": r.year,
+                "score": r.score,
+                "chunk_count": 1,
+            }
+        else:
+            doc_map[r.doc_id]["chunk_count"] += 1
+            if r.score > doc_map[r.doc_id]["score"]:
+                doc_map[r.doc_id]["score"] = r.score
+
+    # Sort by score, take top max_documents
+    docs = sorted(doc_map.values(), key=lambda d: d["score"], reverse=True)[:max_documents]
+
+    # Load full text for each document
+    for doc in docs:
+        full_text = load_full_text(doc["doc_id"])
+        if full_text:
+            doc["text"] = full_text
+            doc["text_length"] = len(full_text)
+        else:
+            doc["text"] = f"[Document text not available for {doc['doc_id']}]"
+            doc["text_length"] = 0
+
+    total_chars = sum(d.get("text_length", 0) for d in docs)
+    logger.info(
+        "Search: query=%r → %d chunks → %d unique docs → %d chars total",
+        query[:60], len(results), len(docs), total_chars,
+    )
+
+    return docs
 
 
 @app.get("/health")
@@ -113,11 +161,9 @@ def main():
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    # Pre-set provider if specified
     if args.provider:
         os.environ["EMBEDDING_PROVIDER"] = args.provider
 
-    # Pre-load retriever
     logger.info("Loading retriever (this may take a moment)...")
     get_retriever(args.provider)
     logger.info("Retriever loaded. Starting server on port %d", args.port)

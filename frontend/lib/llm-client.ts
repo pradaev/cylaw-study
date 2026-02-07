@@ -141,9 +141,14 @@ function formatSearchResults(results: SearchResult[]): string {
   return results
     .map(
       (r, i) =>
-        `[Result ${i + 1}] ${r.title}\nCourt: ${r.court} | Year: ${r.year} | Relevance: ${r.score}%\n${r.text}`,
+        `══════════════════════════════════════════\n` +
+        `[Case ${i + 1}] ${r.title}\n` +
+        `Court: ${r.court} | Year: ${r.year} | Relevance: ${r.score}%\n` +
+        `Document ID: ${r.doc_id}\n` +
+        `══════════════════════════════════════════\n\n` +
+        `${r.text}`,
     )
-    .join("\n\n---\n\n");
+    .join("\n\n");
 }
 
 function calculateCost(
@@ -224,6 +229,7 @@ async function streamOpenAI(
   let searchStep = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  let documentsAnalyzed = 0;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const response = await client.chat.completions.create({
@@ -233,7 +239,6 @@ async function streamOpenAI(
       temperature: 0.1,
     });
 
-    // Track tokens from non-streaming call
     if (response.usage) {
       totalInputTokens += response.usage.prompt_tokens;
       totalOutputTokens += response.usage.completion_tokens;
@@ -263,6 +268,7 @@ async function streamOpenAI(
           );
 
           const resultsText = formatSearchResults(results);
+          documentsAnalyzed += results.length;
 
           for (const r of results) {
             if (!allSources.some((s) => s.doc_id === r.doc_id)) {
@@ -298,7 +304,6 @@ async function streamOpenAI(
       if (delta?.content) {
         emit({ event: "token", data: delta.content });
       }
-      // Usage comes in the final chunk
       if (chunk.usage) {
         totalInputTokens += chunk.usage.prompt_tokens;
         totalOutputTokens += chunk.usage.completion_tokens;
@@ -312,10 +317,11 @@ async function streamOpenAI(
       outputTokens: totalOutputTokens,
       totalTokens: totalInputTokens + totalOutputTokens,
       costUsd,
+      documentsAnalyzed,
     };
 
     console.log(
-      `[LLM] model=${modelCfg.label} in=${totalInputTokens} out=${totalOutputTokens} total=${totalInputTokens + totalOutputTokens} cost=$${costUsd.toFixed(4)}`,
+      `[LLM] model=${modelCfg.label} docs=${documentsAnalyzed} in=${totalInputTokens} out=${totalOutputTokens} total=${totalInputTokens + totalOutputTokens} cost=$${costUsd.toFixed(4)}`,
     );
 
     emit({ event: "usage", data: usage });
@@ -325,10 +331,7 @@ async function streamOpenAI(
 
   // Exhausted rounds
   const costUsd = calculateCost(modelCfg, totalInputTokens, totalOutputTokens);
-  console.log(
-    `[LLM] model=${modelCfg.label} in=${totalInputTokens} out=${totalOutputTokens} cost=$${costUsd.toFixed(4)} (exhausted rounds)`,
-  );
-  emit({ event: "usage", data: { model: modelCfg.label, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, totalTokens: totalInputTokens + totalOutputTokens, costUsd } });
+  emit({ event: "usage", data: { model: modelCfg.label, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, totalTokens: totalInputTokens + totalOutputTokens, costUsd, documentsAnalyzed } as UsageData });
 
   if (allSources.length > 0) {
     emit({ event: "sources", data: allSources });
@@ -360,18 +363,18 @@ async function streamClaude(
   let searchStep = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  let documentsAnalyzed = 0;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const response = await client.messages.create({
       model: modelCfg.modelId,
-      max_tokens: 4000,
+      max_tokens: 8192,
       system,
       messages: apiMessages,
       tools: [CLAUDE_SEARCH_TOOL],
       temperature: 0.1,
     });
 
-    // Track tokens from non-streaming call
     totalInputTokens += response.usage.input_tokens;
     totalOutputTokens += response.usage.output_tokens;
 
@@ -402,6 +405,7 @@ async function streamClaude(
           );
 
           const resultsText = formatSearchResults(results);
+          documentsAnalyzed += results.length;
 
           for (const r of results) {
             if (!allSources.some((s) => s.doc_id === r.doc_id)) {
@@ -428,7 +432,7 @@ async function streamClaude(
 
     const stream = client.messages.stream({
       model: modelCfg.modelId,
-      max_tokens: 4000,
+      max_tokens: 8192,
       system,
       messages: apiMessages,
       temperature: 0.1,
@@ -441,13 +445,11 @@ async function streamClaude(
       ) {
         emit({ event: "token", data: event.delta.text });
       }
-      // Capture usage from final message
       if (event.type === "message_delta") {
         totalOutputTokens += event.usage.output_tokens;
       }
     }
 
-    // Get final message for input token count
     const finalMessage = await stream.finalMessage();
     totalInputTokens += finalMessage.usage.input_tokens;
 
@@ -458,10 +460,11 @@ async function streamClaude(
       outputTokens: totalOutputTokens,
       totalTokens: totalInputTokens + totalOutputTokens,
       costUsd,
+      documentsAnalyzed,
     };
 
     console.log(
-      `[LLM] model=${modelCfg.label} in=${totalInputTokens} out=${totalOutputTokens} total=${totalInputTokens + totalOutputTokens} cost=$${costUsd.toFixed(4)}`,
+      `[LLM] model=${modelCfg.label} docs=${documentsAnalyzed} in=${totalInputTokens} out=${totalOutputTokens} total=${totalInputTokens + totalOutputTokens} cost=$${costUsd.toFixed(4)}`,
     );
 
     emit({ event: "usage", data: usage });
@@ -471,10 +474,7 @@ async function streamClaude(
 
   // Exhausted rounds
   const costUsd = calculateCost(modelCfg, totalInputTokens, totalOutputTokens);
-  console.log(
-    `[LLM] model=${modelCfg.label} in=${totalInputTokens} out=${totalOutputTokens} cost=$${costUsd.toFixed(4)} (exhausted rounds)`,
-  );
-  emit({ event: "usage", data: { model: modelCfg.label, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, totalTokens: totalInputTokens + totalOutputTokens, costUsd } });
+  emit({ event: "usage", data: { model: modelCfg.label, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, totalTokens: totalInputTokens + totalOutputTokens, costUsd, documentsAnalyzed } as UsageData });
 
   if (allSources.length > 0) {
     emit({ event: "sources", data: allSources });

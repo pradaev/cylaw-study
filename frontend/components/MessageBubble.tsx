@@ -87,6 +87,9 @@ export function MessageBubble({
         {usage && !isStreaming && (
           <div className="mt-2 flex items-center gap-3 text-[11px] text-zinc-600">
             <span>{usage.model}</span>
+            {usage.documentsAnalyzed != null && usage.documentsAnalyzed > 0 && (
+              <span>{usage.documentsAnalyzed} cases analyzed</span>
+            )}
             <span>{usage.totalTokens.toLocaleString()} tokens</span>
             <span className="text-zinc-500 font-medium">{formatCost(usage.costUsd)}</span>
           </div>
