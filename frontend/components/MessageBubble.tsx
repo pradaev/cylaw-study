@@ -51,17 +51,29 @@ export function MessageBubble({
               : "py-2"
           }
         >
-          {/* Searching indicator */}
-          {searching && <SearchIndicator query={searching.query} step={searching.step} />}
+          {/* Searching indicator — only while actively searching */}
+          {searching && searching.step > 0 && (
+            <SearchIndicator query={searching.query} step={searching.step} />
+          )}
+
+          {/* Thinking indicator — shown while waiting for first token */}
+          {isStreaming && !content && !searching && (
+            <div className="flex items-center gap-2.5 text-sm text-zinc-400 py-2">
+              <div className="w-4 h-4 border-2 border-zinc-600 border-t-indigo-500 rounded-full animate-spin" />
+              <span>Thinking...</span>
+            </div>
+          )}
 
           {/* Message text */}
-          <div
-            className="msg-text text-[15px] leading-relaxed"
-            dangerouslySetInnerHTML={{ __html: renderedHtml }}
-          />
+          {content && (
+            <div
+              className="msg-text text-[15px] leading-relaxed"
+              dangerouslySetInnerHTML={{ __html: renderedHtml }}
+            />
+          )}
 
           {/* Typing cursor */}
-          {isStreaming && (
+          {isStreaming && content && (
             <span className="inline-block w-0.5 h-4 bg-indigo-500 animate-pulse align-text-bottom ml-0.5" />
           )}
         </div>

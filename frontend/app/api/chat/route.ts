@@ -8,14 +8,19 @@
  *   - searching: { query, step }
  *   - sources: SearchResult[]
  *   - token: string
+ *   - usage: UsageData
  *   - done: {}
  *   - error: string
  *
  * Authentication is handled by Cloudflare Access (Zero Trust).
+ *
+ * In development: uses local ChromaDB via rag/search_server.py
+ * In production: uses Cloudflare Vectorize (Phase 2)
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { chatStream, stubSearchFn } from "@/lib/llm-client";
+import { localSearchFn } from "@/lib/local-retriever";
 import type { ChatMessage } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
@@ -35,9 +40,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No messages" }, { status: 400 });
   }
 
-  // Phase 1: use stub search function (returns empty results)
-  // Phase 2: replace with Vectorize-backed search
-  const searchFn = stubSearchFn;
+  // Use local ChromaDB search in development, stub in production (until Phase 2)
+  const isDev = process.env.NODE_ENV === "development" || process.env.NEXTJS_ENV === "development";
+  const searchFn = isDev ? localSearchFn : stubSearchFn;
 
   const stream = chatStream(messages, model, translate, searchFn);
 

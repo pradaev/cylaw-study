@@ -91,7 +91,7 @@ export function ChatArea() {
       setAssistant({
         content: "",
         sources: [],
-        searching: { query: "", step: 0 },
+        searching: null,
         isStreaming: true,
         usage: null,
       });

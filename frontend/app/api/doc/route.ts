@@ -3,12 +3,14 @@
  *
  * GET /api/doc?doc_id=administrative/2016/201601-1113-13.md
  *
- * Reads a Markdown file from R2 and returns rendered HTML.
+ * In development: reads .md files from local data/cases_parsed/ directory.
+ * In production: reads from Cloudflare R2 bucket.
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { marked } from "marked";
+import { readFile } from "fs/promises";
+import { join, resolve } from "path";
 
 export async function GET(request: NextRequest) {
   const docId = request.nextUrl.searchParams.get("doc_id");
@@ -23,15 +25,12 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { env } = getCloudflareContext() as { env: CloudflareEnv };
-    const bucket = env.DOCS_BUCKET;
-    const object = await bucket.get(docId);
+    const mdText = await loadDocument(docId);
 
-    if (!object) {
+    if (!mdText) {
       return NextResponse.json({ error: "Document not found" }, { status: 404 });
     }
 
-    const mdText = await object.text();
     const html = await marked.parse(mdText);
 
     // Extract title from first heading
@@ -44,4 +43,43 @@ export async function GET(request: NextRequest) {
     console.error("Doc route error:", message);
     return NextResponse.json({ error: "Failed to load document" }, { status: 500 });
   }
+}
+
+async function loadDocument(docId: string): Promise<string | null> {
+  const isDev = process.env.NODE_ENV === "development" || process.env.NEXTJS_ENV === "development";
+
+  if (isDev) {
+    return loadFromDisk(docId);
+  }
+
+  return loadFromR2(docId);
+}
+
+/** Development: read from local data/cases_parsed/ directory */
+async function loadFromDisk(docId: string): Promise<string | null> {
+  const casesDir = join(process.cwd(), "..", "data", "cases_parsed");
+  const filePath = resolve(casesDir, docId);
+
+  // Double-check resolved path is still within cases_parsed
+  if (!filePath.startsWith(resolve(casesDir))) {
+    return null;
+  }
+
+  try {
+    return await readFile(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/** Production: read from Cloudflare R2 bucket */
+async function loadFromR2(docId: string): Promise<string | null> {
+  const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+  const { env } = getCloudflareContext() as { env: CloudflareEnv };
+  const bucket = env.DOCS_BUCKET;
+  const object = await bucket.get(docId);
+
+  if (!object) return null;
+
+  return object.text();
 }
