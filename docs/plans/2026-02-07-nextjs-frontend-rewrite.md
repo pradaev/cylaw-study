@@ -12,7 +12,7 @@ todos:
     status: done
   - id: r2-setup
     content: Create R2 bucket 'cyprus-case-law-docs', write Python upload script, upload ~150K parsed .md files
-    status: in_progress  # upload script written, upload NOT yet run
+    status: done  # 149,886 files uploaded to R2
   - id: nextjs-init
     content: Initialize Next.js project in frontend/ with TypeScript, Tailwind, @opennextjs/cloudflare
     status: done
@@ -32,8 +32,8 @@ todos:
     content: Write app/page.tsx (chat) and app/login/page.tsx with Perplexity-style layout
     status: done
   - id: deploy-cf-phase1
-    content: Deploy Phase 1 to Cloudflare Pages (doc viewer + UI shell, chat shows "search unavailable")
-    status: pending
+    content: Deploy Phase 1 to Cloudflare Workers (doc viewer + chat + summarizer via R2)
+    status: done  # deployed to https://cyprus-case-law.cylaw-study.workers.dev
   - id: vectorize-migrate
     content: "PHASE 2: When vectorization completes — run migrate_to_cloudflare.py, add Vectorize binding"
     status: pending

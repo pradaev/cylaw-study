@@ -21,45 +21,126 @@ import type { FetchDocumentFn } from "@/lib/llm-client";
 const isDev = process.env.NODE_ENV === "development" || process.env.NEXTJS_ENV === "development";
 
 /**
- * Fetch document from Cloudflare R2 bucket.
- * Uses async mode for getCloudflareContext — required in dev (Node.js runtime),
- * also works in production (Workers runtime).
+ * Fetch document from Cloudflare R2 via Worker binding.
+ * Only works in production (Cloudflare Workers runtime) where the real R2 bucket is bound.
+ * In dev, initOpenNextCloudflareForDev provides a LOCAL emulator (miniflare) which is empty,
+ * so this will return null — use r2FetchViaS3 for dev instead.
  */
-const r2FetchDocument: FetchDocumentFn = async (docId: string): Promise<string | null> => {
+const r2FetchViaBinding: FetchDocumentFn = async (docId: string): Promise<string | null> => {
   try {
     const { getCloudflareContext } = await import("@opennextjs/cloudflare");
-    const { env } = await getCloudflareContext({ async: true });
-    const bucket = (env as unknown as CloudflareEnv).DOCS_BUCKET;
+    const ctx = await getCloudflareContext({ async: true });
+    const bucket = (ctx.env as unknown as CloudflareEnv).DOCS_BUCKET;
+    if (!bucket) return null;
     const object = await bucket.get(docId);
     if (!object) return null;
     return object.text();
-  } catch (err) {
-    console.error("[r2FetchDocument] Failed to read from R2:", docId, err instanceof Error ? err.message : err);
+  } catch {
     return null;
   }
 };
 
 /**
- * Fetch document with R2-first strategy.
- * Tries R2 binding first (works in prod and wrangler dev),
- * falls back to local Python search server if R2 is unavailable (plain npm run dev).
+ * Fetch document from R2 via S3-compatible HTTP API.
+ * Works in dev (Node.js runtime) by calling the real Cloudflare R2 over HTTPS.
+ * Requires CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_R2_ACCESS_KEY_ID, CLOUDFLARE_R2_SECRET_ACCESS_KEY env vars.
  */
-const fetchDocumentWithFallback: FetchDocumentFn = async (docId: string): Promise<string | null> => {
-  const r2Result = await r2FetchDocument(docId);
-  if (r2Result) return r2Result;
+const r2FetchViaS3: FetchDocumentFn = async (docId: string): Promise<string | null> => {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const accessKey = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID;
+  const secretKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY;
+  const bucket = "cyprus-case-law-docs";
 
-  // Fallback to local Python server (only useful in dev)
-  return localFetchDocument(docId);
+  if (!accountId || !accessKey || !secretKey) {
+    console.error("[r2FetchViaS3] Missing R2 credentials in env");
+    return null;
+  }
+
+  try {
+    // Use unsigned URL with AWS Signature V4 via fetch
+    // R2 S3 endpoint: https://{account_id}.r2.cloudflarestorage.com
+    const url = `https://${accountId}.r2.cloudflarestorage.com/${bucket}/${docId}`;
+
+    // AWS Signature V4 — construct manually for a simple GET
+    const now = new Date();
+    const dateStamp = now.toISOString().replace(/[-:]/g, "").slice(0, 8);
+    const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+    const region = "auto";
+    const service = "s3";
+
+    const { createHmac, createHash } = await import("crypto");
+
+    function hmacSha256(key: Buffer | string, data: string): Buffer {
+      return createHmac("sha256", key).update(data).digest();
+    }
+    function sha256(data: string): string {
+      return createHash("sha256").update(data).digest("hex");
+    }
+
+    const host = `${accountId}.r2.cloudflarestorage.com`;
+    const canonicalUri = `/${bucket}/${docId}`;
+    const canonicalQuerystring = "";
+    const payloadHash = sha256("");
+    const canonicalHeaders = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+    const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+
+    const canonicalRequest = [
+      "GET", canonicalUri, canonicalQuerystring,
+      canonicalHeaders, signedHeaders, payloadHash,
+    ].join("\n");
+
+    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+    const stringToSign = [
+      "AWS4-HMAC-SHA256", amzDate, credentialScope, sha256(canonicalRequest),
+    ].join("\n");
+
+    const signingKey = hmacSha256(
+      hmacSha256(
+        hmacSha256(
+          hmacSha256(`AWS4${secretKey}`, dateStamp),
+          region,
+        ),
+        service,
+      ),
+      "aws4_request",
+    );
+    const signature = createHmac("sha256", signingKey).update(stringToSign).digest("hex");
+
+    const authorization = `AWS4-HMAC-SHA256 Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+    const res = await fetch(url, {
+      headers: {
+        Host: host,
+        "x-amz-date": amzDate,
+        "x-amz-content-sha256": payloadHash,
+        Authorization: authorization,
+      },
+    });
+
+    if (!res.ok) {
+      console.error("[r2FetchViaS3] HTTP", res.status, "for", docId);
+      return null;
+    }
+
+    return res.text();
+  } catch (err) {
+    console.error("[r2FetchViaS3] Error:", docId, err instanceof Error ? err.message : err);
+    return null;
+  }
 };
 
 // Wire up document fetching for the summarizer agents
 if (isDev) {
-  // In dev: try R2 first (works with wrangler dev / initOpenNextCloudflareForDev),
-  // fall back to local Python server if CF context is not available
-  setFetchDocumentFn(fetchDocumentWithFallback);
+  // Dev: use S3 HTTP API to reach the REAL R2 bucket (not miniflare emulator)
+  // Falls back to local Python server if R2 credentials are missing
+  setFetchDocumentFn(async (docId) => {
+    const r2Text = await r2FetchViaS3(docId);
+    if (r2Text) return r2Text;
+    return localFetchDocument(docId);
+  });
 } else {
-  // In production: R2 only
-  setFetchDocumentFn(r2FetchDocument);
+  // Production: use Worker binding (direct, zero-latency)
+  setFetchDocumentFn(r2FetchViaBinding);
 }
 
 export async function POST(request: NextRequest) {
