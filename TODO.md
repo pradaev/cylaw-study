@@ -3,11 +3,12 @@
 ## High Priority
 
 ### Deploy to production
+- [ ] Upload ~150K parsed docs to R2 (script ready: `python -m rag.upload_to_r2`)
 - [ ] Set up Cloudflare Vectorize index (1536 dims, OpenAI text-embedding-3-small)
-- [ ] Write upload script: ChromaDB → Cloudflare Vectorize (batch upsert 5000/req)
-- [ ] Rewrite retriever to use Cloudflare Vectorize API instead of ChromaDB
-- [ ] Deploy FastAPI app to Railway / Cloudflare Workers
-- [ ] Configure environment variables on hosting platform
+- [ ] Migrate vectors: ChromaDB → Cloudflare Vectorize (batch upsert 5000/req)
+- [ ] Write `lib/retriever.ts` to use Cloudflare Vectorize binding
+- [ ] Deploy Next.js app to Cloudflare Pages
+- [ ] Configure environment variables on Cloudflare dashboard
 - [ ] Test end-to-end in production
 
 ### Improve search quality
@@ -26,14 +27,15 @@
 
 ## Medium Priority
 
-### Download remaining courts
-- [ ] Areios Pagos — 46,159 cases (largest uncollected court)
-- [ ] First Instance Courts — 37,840 cases (5 categories: civil, criminal, family, rental, labour)
-- [ ] JSC (Supreme Court in English) — 2,429 cases
-- [ ] Constitutional Court 1960-63 — 122 cases
-- [ ] Admin Appeal Court — 69 cases
-- [ ] Juvenile Court — 11 cases
-- [ ] Re-run full pipeline: download → parse → chunk → embed
+### ~~Download remaining courts~~ ✅ Done (2026-02-07)
+All 15 courts scraped and parsed: 149,886 files (5.5 GB) in `data/cases_parsed/`.
+- [x] Areios Pagos — 46,159 cases
+- [x] First Instance Courts — 37,840 cases (5 categories: civil, criminal, family, rental, labour)
+- [x] JSC (Supreme Court in English) — 2,429 cases
+- [x] Constitutional Court 1960-63 — 122 cases
+- [x] Admin Appeal Court — 69 cases
+- [x] Juvenile Court — 11 cases
+- [ ] Re-run full pipeline for new courts: chunk → embed (not yet done for new courts)
 
 ### Chat improvements
 - [ ] Server-side conversation history (SQLite) for persistence across devices

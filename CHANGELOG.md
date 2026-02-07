@@ -5,11 +5,11 @@
 ### Added
 - Next.js frontend on Cloudflare Workers (Phase 1)
 - React chat UI with SSE streaming, document viewer, source cards
-- API routes: chat (function calling), doc viewer (R2), authentication
+- API routes: chat (function calling), doc viewer, authentication
 - TypeScript LLM client supporting GPT-4o, o3-mini, Claude Sonnet 4
-- R2 document storage integration for 150K+ parsed case files
-- R2 upload script with parallel uploads and resume support
-- Cloudflare Workers deployment with wrangler
+- R2 upload script with parallel uploads and resume support (not yet run — no files in R2)
+- Cloudflare Workers deployment config with wrangler
+- Local search server bridge (`rag/search_server.py`) for dev: Next.js ↔ ChromaDB
 - Updated system prompt for 15 courts and 150K+ cases
 
 ### Changed
@@ -26,9 +26,16 @@
 - Follow-up question suggestions after answers
 
 ### Added
-- 6 newly discovered courts from site audit (Areios Pagos 46K, First Instance 37K, JSC 2.4K, Constitutional 1960-63, Admin Appeal, Juvenile)
-- Updated inventory to 150K+ total cases
+- Scraped and parsed all 6 remaining courts (86,630 cases total):
+  - Areios Pagos — 46,159 cases (1968–2026)
+  - First Instance Courts — 37,840 cases (2005–2026, 5 categories)
+  - JSC (English) — 2,429 cases (1964–1988)
+  - RSCC (Constitutional 1960–63) — 122 cases
+  - Admin Court of Appeal — 69 cases (2025–2026)
+  - Juvenile Court — 11 cases (2023–2025)
+- Full corpus now: 149,886 parsed files (5.5 GB) across all 15 courts
 - DATABASE_AUDIT.md with detailed findings
+- Site audit discovered 6 new courts from sidebar `/common/left.html`
 
 ### Added
 - Full parsing pipeline documentation (docs/PARSING_PIPELINE.md)
@@ -52,7 +59,7 @@
 
 ### Added
 - Complete web scraper for cylaw.org
-- Index parser for 9 courts (3 HTML page formats)
+- Index parser for 9 courts initially (3 HTML page formats); later extended to all 15
 - Bulk downloader with 30-thread parallelism and resume support
 - CSV converter for legacy Supreme Court databases
 - 32 unit tests covering parser, fetcher, storage

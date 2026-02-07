@@ -9,28 +9,28 @@ overview: |
 todos:
   - id: changelog-fix
     content: Fix changelog.mdc to match existing CHANGELOG.md format, update globs to include .py
-    status: pending
+    status: done
   - id: r2-setup
-    content: Create R2 bucket 'cylaw-docs', write Python upload script, upload ~63K parsed .md files
-    status: pending
+    content: Create R2 bucket 'cylaw-docs', write Python upload script, upload ~150K parsed .md files
+    status: in_progress  # upload script written, upload NOT yet run
   - id: nextjs-init
     content: Initialize Next.js project in frontend/ with TypeScript, Tailwind, @opennextjs/cloudflare
-    status: pending
+    status: done
   - id: wrangler-config
     content: Configure wrangler.jsonc with R2 binding (Vectorize binding added later in Phase 2)
-    status: pending
+    status: done
   - id: ts-lib
     content: Write lib/types.ts, lib/llm-client.ts (function calling + streaming). Retriever is Phase 2.
-    status: pending
+    status: done
   - id: api-routes
-    content: "Write API routes: doc (R2 viewer), auth (password). Chat route is Phase 2."
-    status: pending
+    content: "Write API routes: doc (R2 viewer), auth (password), chat (with local search server bridge)"
+    status: done
   - id: react-components
-    content: "Write React components: ChatArea, MessageBubble, SourceCard, DocViewer, SearchIndicator"
-    status: pending
+    content: "Write React components: ChatArea, MessageBubble, SourceCard, DocViewer"
+    status: done
   - id: pages
     content: Write app/page.tsx (chat) and app/login/page.tsx with Perplexity-style layout
-    status: pending
+    status: done
   - id: deploy-cf-phase1
     content: Deploy Phase 1 to Cloudflare Pages (doc viewer + UI shell, chat shows "search unavailable")
     status: pending
@@ -50,7 +50,10 @@ isProject: false
 
 ## Phased approach
 
-Vectorization (both local model and OpenAI) is still running. Migrating vectors to Cloudflare Vectorize is blocked until that completes. However, **~63K parsed documents are ready** and can be uploaded to R2 immediately.
+Vectorization (both local model and OpenAI) is still running. Migrating vectors to Cloudflare Vectorize is blocked until that completes. **~150K parsed documents (5.5 GB) are ready** across all 15 courts and can be uploaded to R2.
+
+> **Note (2026-02-07):** All 15 courts have been scraped and parsed (149,886 files total).
+> The R2 upload script exists (`rag/upload_to_r2.py`) but has **not been run yet** — no files are in R2.
 
 The plan is split into two phases:
 
@@ -168,7 +171,9 @@ Format: use existing CHANGELOG.md structure with dated sections and ### Added/Ch
 
 ### Step 2. R2 document upload
 
-Documents are ready in `data/cases_parsed/` (~63K `.md` files, ~1.1 GB).
+Documents are ready in `data/cases_parsed/` (~150K `.md` files, ~5.5 GB across all 15 courts).
+
+Upload script (`rag/upload_to_r2.py`) is written but **not yet run**.
 
 **2a. Create R2 bucket:**
 
@@ -177,21 +182,21 @@ Documents are ready in `data/cases_parsed/` (~63K `.md` files, ~1.1 GB).
 npx wrangler r2 bucket create cylaw-docs
 ```
 
-**2b. Write upload script (`rag/upload_to_r2.py`):**
-
-- Walk `data/cases_parsed/` recursively
-- Upload each `.md` file to R2 with key = relative path (e.g., `administrative/2016/201601-1113-13.md`)
-- Use Cloudflare S3-compatible API (boto3 with custom endpoint)
-- Batch uploads, track progress, resume on interruption
-- Expected: ~63K files, ~1.1 GB total
-
-**2c. Run upload:**
+**2b. Run upload:**
 
 ```bash
 python -m rag.upload_to_r2
+# Or test with: python -m rag.upload_to_r2 --limit 100
+# Check progress: python -m rag.upload_to_r2 --stats
 ```
 
-**Cost: $0/month** — 1.1 GB well within R2 free tier (10 GB storage, 10M reads/mo, zero egress).
+- Walks `data/cases_parsed/` recursively
+- Uploads each `.md` file to R2 with key = relative path (e.g., `administrative/2016/201601-1113-13.md`)
+- Uses Cloudflare S3-compatible API (boto3 with custom endpoint)
+- Parallel uploads with progress tracking and resume support
+- Expected: ~150K files, ~5.5 GB total
+
+**Cost: ~$0/month** — 5.5 GB within R2 free tier (10 GB storage, 10M reads/mo, zero egress).
 
 ### Step 3. Initialize Next.js
 
