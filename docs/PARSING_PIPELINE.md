@@ -1,10 +1,10 @@
-# CyLaw Parsing Pipeline — Full Documentation
+# Cyprus Case Law — Parsing Pipeline Documentation
 
 ## Overview
 
-This document describes the complete data pipeline for extracting, downloading, and processing court case documents from [cylaw.org](https://www.cylaw.org) — the Cyprus Legal Information Institute.
+This document describes the complete data pipeline for extracting, downloading, and processing court case documents from cylaw.org — the Cyprus Legal Information Institute.
 
-The pipeline produces a searchable corpus of **63,000+ court decisions** as clean Markdown files with preserved cross-references, organized by court and year.
+The pipeline produces a searchable corpus of **149,886 court decisions** from **15 courts** as clean Markdown files with preserved cross-references, organized by court and year.
 
 ---
 
@@ -14,7 +14,7 @@ The pipeline produces a searchable corpus of **63,000+ court decisions** as clea
 Stage 1: INDEX          Stage 2: DOWNLOAD        Stage 3: PARSE           Stage 4: INDEX (RAG)
 scrape.py               downloader.py            extract_text.py          rag/ingest.py
 
-cylaw.org HTML    →     63K HTML/PDF files   →   63K Markdown files   →   ChromaDB vectors
+cylaw.org HTML    →     150K HTML/PDF files  →   150K Markdown files  →   ChromaDB vectors
 index pages             data/cases/              data/cases_parsed/       data/chromadb_*/
       ↓
 JSON indexes
@@ -42,7 +42,7 @@ Fetch the index pages from cylaw.org for each court and extract a list of every 
 
 ### Court Registry (`scraper/config.py`)
 
-9 courts, each with its own URL pattern:
+15 courts total. Original 9 courts listed below, plus 6 additional courts added later (see `docs/DATABASE_AUDIT.md`):
 
 | Court ID | Description | Base URL | Year Pattern | Years |
 |----------|-------------|----------|--------------|-------|
@@ -153,7 +153,7 @@ The converter normalizes paths (`/aad/` → `/apofaseis/aad/`) and produces `dat
 
 ### Purpose
 
-Download all 63,000+ case files (HTML and PDF) from cylaw.org, preserving directory structure.
+Download all 149,886 case files (HTML and PDF) from cylaw.org, preserving directory structure.
 
 ### Script: `scraper/downloader.py`
 
@@ -355,19 +355,29 @@ ECLI:CY:DD:2016:6
 
 ### Corpus Statistics
 
+Original 9 courts (detailed stats available):
+
 | Court | Files | Words | Avg words/doc | Cross-refs |
 |-------|-------|-------|---------------|------------|
 | aad | 45,015 | 105.7M | 2,348 | 543,337 |
+| areiospagos | 46,159 | — | — | — |
+| apofaseised | 37,840 | — | — | — |
 | administrativeIP | 6,889 | 26.3M | 3,810 | 80,258 |
 | administrative | 5,782 | 17.9M | 3,093 | 81,866 |
-| epa | 784 | 5.5M | 6,975 | 79 |
 | aap | 2,184 | 4.4M | 2,021 | 556 |
+| jsc | 2,429 | — | — | — |
 | courtOfAppeal | 1,111 | 4.2M | 3,764 | 23,437 |
 | supreme | 1,028 | 2.5M | 2,439 | 11,550 |
+| epa | 784 | 5.5M | 6,975 | 79 |
 | supremeAdministrative | 421 | 1.2M | 2,801 | 5,465 |
+| rscc | 122 | — | — | — |
+| administrativeCourtOfAppeal | 69 | — | — | — |
 | clr | 41 | 112K | 2,722 | 0 |
+| juvenileCourt | 11 | — | — | — |
 | dioikitiko | 1 | 1K | 1,109 | 4 |
-| **Total** | **63,256** | **167.7M** | **2,651** | **746,552** |
+| **Total** | **149,886** | **~300M+** | **~2,600** | **746,552+** |
+
+Note: Word counts for newly added courts (areiospagos, apofaseised, jsc, rscc, administrativeCourtOfAppeal, juvenileCourt) have not been recalculated yet.
 
 ---
 
@@ -399,7 +409,7 @@ Each Markdown file is split into overlapping chunks:
 
 Each chunk carries metadata: `doc_id`, `title`, `court`, `year`, `chunk_index`, `cross_refs`.
 
-Total: **~773,000 chunks** from 63,256 documents.
+Total: **~2,269,231 chunks** from 149,886 documents (local model). Only the original 9 courts have been indexed so far; the 6 new courts need re-indexing.
 
 ### Running
 
@@ -457,8 +467,9 @@ python -m scraper.extract_text
 python -m rag.ingest --provider local
 python -m rag.ingest --provider openai  # optional, parallel
 
-# 5. Start web server
-uvicorn web.app:app --host 0.0.0.0 --port 8000
+# 5. Start search server + frontend
+python -m rag.search_server --provider local  # terminal 1
+cd frontend && npm run dev                     # terminal 2
 ```
 
 ---
@@ -477,37 +488,26 @@ The site uses ISO-8859-7 (Greek) encoding. All parsers handle encoding detection
 
 The corpus contains **746,552 cross-references** between cases. These are preserved as Markdown links in the parsed files, enabling future graph analysis of case law citations.
 
-### Data Volumes (current)
+### Data Volumes (current — as of 2026-02-07)
 
 | What | Count | Size |
 |------|-------|------|
-| Index pages fetched | ~160 | cached in data/cache/ |
-| JSON index entries | 63,259 unique | 10 JSON files |
-| Downloaded case files | 63,258 | 3.15 GB |
-| Parsed Markdown files | 63,256 | ~1.1 GB |
-| Total words | 167,735,575 | |
-| Vector chunks | ~773,316 | |
+| Courts covered | 15 | All courts on cylaw.org |
+| Downloaded case files | 149,886 | ~8 GB |
+| Parsed Markdown files | 149,886 | ~5.5 GB |
+| Total words | ~300M+ | |
+| Vector chunks (ChromaDB local) | ~2,269,231 | ~38 GB |
+| Cross-references | 746,552+ | |
 
 ---
 
-## Not Yet Scraped (Audit: 2026-02-07)
+## Court Scraping Status (as of 2026-02-07)
 
-The site sidebar (`/common/left.html`) lists 6 additional court databases not yet in our pipeline.
-Full details in `docs/DATABASE_AUDIT.md`.
+**All 15 courts have been scraped, downloaded, and parsed.** Total: 149,886 files.
 
-### Missing Court Databases
+See `docs/DATABASE_AUDIT.md` for detailed breakdown per court.
 
-| Court | court_id | URL pattern | Years | Cases |
-|-------|----------|-------------|-------|-------|
-| Areios Pagos | `areiospagos` | `/areiospagos/index_{year}.html` | 1968–2026 | **46,159** |
-| First Instance Courts | `apofaseised` | `/apofaseised/index_{cat}_{year}.html` | 2005–2026 | **37,840** |
-| JSC (English) | `jsc` | `/jsc/index_{year}.html` | 1964–1988 | **2,429** |
-| Supreme Constitutional (1960-63) | `rscc` | `/rscc/index_{vol}.html` | 1960–1963 | **122** |
-| Admin Court of Appeal | `administrativeCourtOfAppeal` | `/administrativeCourtOfAppeal/index_{year}.html` | 2025–2026 | **69** |
-| Juvenile Court | `juvenileCourt` | `/juvenileCourt/index_{year}.html` | 2023–2025 | **11** |
-| **Total missing** | | | | **86,630** |
-
-### Missing Legislation Databases
+### Not Yet Scraped: Legislation
 
 | Database | URL | Approx. count |
 |----------|-----|---------------|
@@ -519,9 +519,4 @@ Full details in `docs/DATABASE_AUDIT.md`.
 | Rules of Civil Procedure | `/cpr.html` | unknown |
 | New Civil Procedure Rules | `/ncpr.html` | ~161 rules |
 
-### Notes for implementation
-
-- `areiospagos`, `jsc`, `administrativeCourtOfAppeal`, `juvenileCourt` use standard `index_{year}.html` pattern — can reuse existing `CourtConfig`
-- `apofaseised` uses category-based pattern `index_{cat}_{year}.html` with 5 categories (pol, poin, oik, enoik, erg) — needs `CourtConfig` extension
-- `rscc` uses volume-based pattern `index_{vol}.html` (1–5) — needs special handling
-- Legislation databases have a completely different structure (hierarchical catalogs, not `open.pl` links) — requires separate parser
+Legislation databases have a completely different structure (hierarchical catalogs, not `open.pl` links) — requires separate parser.
