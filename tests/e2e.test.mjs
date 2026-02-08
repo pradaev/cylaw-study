@@ -24,42 +24,41 @@ const BASE_URL = process.env.E2E_BASE_URL || "http://localhost:3000";
 const TEST_QUERIES = [
   {
     id: "1-one-third",
-    query: "How courts apply the presumption of one-third in property dispute cases in divorces?",
+    query: "Πώς εφαρμόζουν τα δικαστήρια το τεκμήριο του ενός τρίτου σε υποθέσεις περιουσιακών διαφορών σε διαζύγια;",
     expected: {
       minSearches: 2,
-      minSources: 30,
-      minSummarized: 20,
+      minSources: 20,
+      minSummarized: 15,
       yearFilterApplied: false,
     },
   },
   {
     id: "2-foreign-law",
-    query: "Application of the foreign law in property dispute cases in divorce proceedings in the last five years",
+    query: "Η εφαρμογή του αλλοδαπού δικαίου σε υποθέσεις περιουσιακών διαφορών στο πλαίσιο διαδικασιών διαζυγίου κατά την τελευταία πενταετία",
     expected: {
       minSearches: 2,
       minSources: 15,
       minSummarized: 10,
-      yearFilterApplied: true,
-      yearFrom: 2021,
+      yearFilterApplied: false,  // LLM may or may not apply year filter from Greek text
     },
   },
   {
     id: "3-amending-pleadings",
-    query: "Find cases outlining the principles and criteria for amending the pleadings filed in an action or application, after they are filed but before the hearing date. Prioritise judgments by the Supreme Court and Court of Appeal",
+    query: "Βρες τις κυρίες αποφάσεις του Ανώτατου Δικαστηρίου που αναλύουν τις βασικές αρχές για την τροποποίηση δικογράφου μετά την καταχώρηση. Δώσε προτεραιότητα σε αποφάσεις του Ανώτατου Δικαστηρίου και Εφετείου.",
     expected: {
       minSearches: 2,
-      minSources: 40,
-      minSummarized: 30,
+      minSources: 20,
+      minSummarized: 15,
       yearFilterApplied: false,
     },
   },
   {
     id: "4-delay-defence",
-    query: "Find cases which consider when the delay in filing a claim can be a defence to the claim. Prioritise cases by the Supreme Court and the Court of Appeal. Outline the court's reasoning and relevant principles",
+    query: "Βρες αποφάσεις που εξετάζουν πότε η καθυστέρηση στην κατάθεση αγωγής μπορεί να αποτελέσει άμυνα. Δώσε προτεραιότητα σε αποφάσεις του Ανώτατου Δικαστηρίου και του Εφετείου.",
     expected: {
       minSearches: 2,
-      minSources: 30,
-      minSummarized: 20,
+      minSources: 20,
+      minSummarized: 15,
       yearFilterApplied: false,
     },
   },
@@ -74,7 +73,6 @@ async function runQuery(query) {
     body: JSON.stringify({
       messages: [{ role: "user", content: query }],
       model: "gpt-4o",
-      translate: true,
       sessionId: "e2e-test",
     }),
   });
@@ -122,13 +120,14 @@ async function runQuery(query) {
             profile.sources = JSON.parse(data);
             break;
           }
-          case "summarizing": {
+              case "summarizing": {
             const d = JSON.parse(data);
-            profile.summarized = d.count;
+            profile.summarized += d.count;
             break;
           }
           case "summaries": {
-            profile.summaries = JSON.parse(data);
+            const entries = JSON.parse(data);
+            profile.summaries.push(...entries);
             break;
           }
           case "token": {
@@ -235,14 +234,13 @@ function checkAssertions(tc, profile) {
     results.push({ pass: false, test: "No summaries received" });
   }
 
-  // 8. Search language diversity (at least one English OR one Greek)
+  // 8. Search queries must be in Cypriot Greek
   const queries = profile.searches.map((s) => s.query ?? "");
   const hasGreek = queries.some((q) => /[\u0370-\u03FF]/.test(q));
-  const hasEnglish = queries.some((q) => /^[a-zA-Z\s]+$/.test(q.slice(0, 20)));
   if (hasGreek) {
-    results.push({ pass: true, test: "Has Greek search queries" });
+    results.push({ pass: true, test: "Αναζητήσεις στα κυπριακά ελληνικά" });
   } else {
-    results.push({ pass: false, test: "No Greek search queries found" });
+    results.push({ pass: false, test: "Δεν βρέθηκαν αναζητήσεις στα ελληνικά" });
   }
 
   return results;

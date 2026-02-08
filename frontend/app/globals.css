@@ -9,7 +9,7 @@
   width: 6px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2e3140;
+  background: #d1d5db;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-track {
@@ -21,13 +21,13 @@
   margin-bottom: 0.75rem;
 }
 .msg-text strong {
-  color: #818cf8;
+  color: #4f46e5;
 }
 .msg-text blockquote {
-  border-left: 3px solid #6366f1;
+  border-left: 3px solid #a5b4fc;
   padding-left: 1rem;
   margin: 0.75rem 0;
-  color: #8b8d98;
+  color: #6b7280;
 }
 .msg-text ol,
 .msg-text ul {
@@ -38,7 +38,7 @@
   margin-bottom: 0.3rem;
 }
 .msg-text a {
-  color: #6366f1;
+  color: #4f46e5;
 }
 
 /* Document viewer content */
@@ -55,12 +55,12 @@
 }
 .doc-content hr {
   border: none;
-  border-top: 1px solid #2e3140;
+  border-top: 1px solid #e5e7eb;
   margin: 1.5rem 0;
 }
 .doc-content a {
-  color: #6366f1;
+  color: #4f46e5;
 }
 .doc-content strong {
-  color: #818cf8;
+  color: #4f46e5;
 }

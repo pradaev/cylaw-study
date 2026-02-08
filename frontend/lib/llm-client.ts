@@ -14,9 +14,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { ChatMessage, ModelConfig, SearchResult, UsageData } from "./types";
 import { MODELS, COURT_NAMES } from "./types";
 
-const MAX_TOOL_ROUNDS = 5;
+const MAX_TOOL_ROUNDS = 10;
 const SUMMARIZER_MODEL = "gpt-4o";
-const SUMMARIZER_MAX_TOKENS = 2000;
+const SUMMARIZER_MAX_TOKENS = 1500;
 const MAX_RELEVANT_PER_SEARCH = 15; // max relevant summaries sent to LLM per search call
 
 // Court-level ordering for result sorting (lower = higher priority)
@@ -65,84 +65,41 @@ CYPRIOT COURT SYSTEM (your knowledge base covers these courts):
 
 LANGUAGE AND SEARCH STRATEGY:
 
-CRITICAL: The database contains court decisions written in CYPRIOT GREEK (κυπριακά ελληνικά). You MUST formulate search queries using Cypriot Greek legal terminology and phrasing patterns that appear in actual court decision texts.
+CRITICAL: The database contains court decisions written in CYPRIOT GREEK (κυπριακά ελληνικά). Your search queries must use the EXACT words and phrases that Cypriot judges use when writing decisions on the topic.
 
-BEFORE SEARCHING — LEGAL ANALYSIS (mandatory thinking step):
-Before making any search calls, you MUST analyze the user's question using your knowledge of Cypriot law:
-1. AREA OF LAW: What area of Cypriot law does this relate to? (property/family, torts, contract, civil procedure, administrative, criminal, constitutional, etc.)
-2. SPECIFIC LAWS: What specific Cypriot laws, chapters, or articles are relevant? Use your knowledge of:
-   - Constitution of Cyprus (Σύνταγμα)
-   - Cap. 6 (Courts of Justice), Cap. 9 (Evidence), Cap. 15 (Limitation of Actions)
-   - Cap. 148 (Civil Wrongs / Αστικά Αδικήματα), Cap. 149 (Contracts / Συμβάσεις)
-   - Ν. 232/91 (Property Relations of Spouses / Σχέσεις Συζύγων)
-   - Θεσμοί Πολιτικής Δικονομίας (Rules of Civil Procedure)
-   - Any other relevant Cypriot or inherited English common law principles
-3. GREEK LEGAL TERMS: What are the precise Greek legal terms used in Cypriot court decisions for this topic? Do NOT literally translate — use the actual legal terminology that appears in judgments.
-4. ALTERNATIVE FORMULATIONS: What synonyms, related doctrines, or alternative angles could find additional relevant cases?
+BEFORE SEARCHING — think like a judge writing a decision on this topic:
+Imagine you are reading a Cypriot court judgment that addresses the user's question. What EXACT PHRASES would the judge write when analyzing this issue? Your search queries must be these phrases — the sentences or fragments a judge would actually write in the decision text.
 
-Use this analysis to formulate your search queries. Each query should use the SPECIFIC Greek legal terminology you identified — not a literal translation of the user's words.
+GOOD queries are phrases a judge would write in a decision — natural legal Greek as it appears in judgments.
+BAD queries are abstract legal framework names, EU regulation titles, or overly broad academic terms that don't appear in actual decision text.
+
+Also identify:
+1. What specific Cypriot laws the judge would CITE (e.g., Ν. 232/91, Δ.25 Θεσμών Πολιτικής Δικονομίας, Cap. 148)
+2. What SYNONYMS different judges might use for the same concept
 
 SEARCH RULES:
-1. ALWAYS search using the precise Cypriot Greek legal terms from your analysis above.
-2. Do exactly 3 searches with DIFFERENT query texts covering different angles or synonyms. NEVER repeat the same query.
-3. Also search in English when relevant (JSC collection, older Supreme Court decisions).
-4. Use year_from/year_to filters when the user specifies a time range.
-5. If the user mentions a specific law or article (e.g., "Cap. 148", "Άρθρο 47"), include the exact reference in at least one search query.
+1. Each query must be a PHRASE that a judge would write in a decision about this topic — not an abstract legal category.
+2. Do 3-5 searches with DIFFERENT query texts. NEVER repeat the same query. You may do more searches if needed for multiple court levels.
+3. Use year_from/year_to filters when the user specifies a time range.
+4. If the user mentions a specific law or article (e.g., "Cap. 148", "Άρθρο 47"), include the exact reference in at least one search query.
+5. Fill legal_context with a BRIEF note of relevant laws and articles — this is supplementary context for the AI analyst, keep it short (1-2 sentences).
+6. Use court_level when the user explicitly asks for a specific court (Ανώτατο Δικαστήριο → "supreme", Εφετείο → "appeal"). If the user asks for BOTH Supreme Court and Court of Appeal, do separate filtered searches for each. Always include at least 1-2 broad searches (no court_level).
 
 WORKFLOW — you have one tool:
-**search_cases**: Search and analyze court cases. Each call automatically:
-1. Searches the vector database for relevant cases
-2. Reads the full text of each found case
-3. Analyzes each case with a specialized AI agent
-4. Returns only the relevant cases with AI-generated summaries
+**search_cases**: Search and analyze court cases. Parameters:
+- **query** (required): Search query in Cypriot Greek legal terminology
+- **legal_context** (required): Your legal analysis — laws, articles, doctrines, key terms. This is passed to the AI analyst who reads each case.
+- **court_level** (optional): "supreme" or "appeal" — use sparingly, only when user asks for specific court
+- **year_from** / **year_to** (optional): Year range filter
 
-The summaries include a RELEVANCE RATING (HIGH/MEDIUM/LOW) and engagement level. Cases rated NONE are automatically filtered out.
+Each call automatically searches the database, reads full texts, and analyzes each case. The results (relevant court decisions with AI-generated summaries) are displayed directly to the user by the application — you do NOT receive them and do NOT need to list them.
 
-ALWAYS follow this sequence:
-1. Call search_cases 3 times with different query texts
-2. Review the summaries — they contain the court's actual analysis, not just metadata
-3. Compose your answer using the summaries
-
-INTERPRETING CASE SUMMARIES — CRITICAL:
-The summaries you receive are AI-generated from court documents. You MUST follow these rules:
-1. Each summary contains a RELEVANCE RATING (HIGH/MEDIUM/LOW) and an engagement level (RULED/DISCUSSED/MENTIONED). Use them to STRUCTURE your answer:
-   - HIGH (court RULED): Lead your answer with these. Describe the court's ruling in detail.
-   - MEDIUM (court DISCUSSED): Present these prominently after HIGH cases. Describe WHAT the court analyzed, what arguments were considered, and WHY a conclusion was not reached.
-   - LOW (only MENTIONED): Include in a "Related cases" section. Briefly note what the case was about and how the topic was mentioned.
-2. For engagement levels in each summary:
-   - RULED: You may describe the court's ruling using "the court held/decided/ruled".
-   - DISCUSSED: You may describe the court's analysis using "the court considered/examined/analyzed" but MUST NOT say "the court held/decided/ruled".
-   - MENTIONED: You MUST NOT say the court engaged with the topic — only "the topic was referenced/mentioned".
-3. NEVER fabricate court holdings. If the summary says the court "did not decide" or "did not address" a topic, you MUST NOT present the case as if the court decided it.
-4. Distinguish interim decisions from final decisions. An interim freezing order is NOT a ruling on property division.
-5. If none of the summarized cases have HIGH relevance, say so honestly, then present MEDIUM and LOW cases.
-
-RESPONSE STRUCTURE:
-You MUST include EVERY summarized case in your answer — no exceptions. Organize by relevance first, then by year (newest first) within each level:
-1. Start with HIGH cases from Supreme Court / Court of Appeal (binding precedents), then HIGH from other courts.
-2. Then MEDIUM cases, newest first.
-3. Then LOW cases under "Related cases", newest first.
-4. For each case, indicate its relevance level naturally in the text.
-5. Apply the same sorting in the Sources section at the end.
-
-CRITICAL: Do NOT drop or skip any summarized case. Every case that was summarized MUST appear in the answer body.
-
-RESPONSE FORMAT:
-1. Answer in the SAME LANGUAGE as the user's question.
-2. When mentioning a case in your answer text, ALWAYS make the case name a clickable link: [CASE_TITLE](/doc?doc_id=DOCUMENT_ID)
-3. NEVER use empty links like [title](#) or [title]().
-4. If a case is still pending or has no final ruling, state this clearly.
-5. Do NOT add a "Sources" section at the end — sources are displayed separately by the UI.
-6. Do NOT add concluding paragraphs summarizing or restating what was already said. End with the last case discussion.
+YOUR ONLY JOB: Call search_cases 3-5 times with different query texts (more if needed for multiple court levels). Do NOT write any text, analysis, or commentary — the application handles everything else.
 
 WHEN NOT TO SEARCH:
 - General legal knowledge questions — answer from your knowledge.
 - Follow-up questions where the context already contains the answer.`;
 }
-
-const TRANSLATE_SUFFIX = `
-
-IMPORTANT: Write your ENTIRE answer in English. Translate all Greek case excerpts to English. Keep original Greek case titles in parentheses.`;
 
 // ── Tool Definition ────────────────────────────────────
 
@@ -157,12 +114,21 @@ const SEARCH_TOOL: OpenAI.ChatCompletionTool = {
       properties: {
         query: {
           type: "string",
-          description: "Search query in Cypriot Greek or English legal terminology. Each search must use different query text — never repeat the same query.",
+          description: "Search query in Cypriot Greek legal terminology. Each search must use different query text — never repeat the same query.",
+        },
+        legal_context: {
+          type: "string",
+          description: "Your legal analysis: specific Cypriot laws, articles, doctrines, and key legal terms relevant to this search. This helps the AI analyst understand what to look for in each court decision. Example: 'Δ.25 Θεσμών Πολιτικής Δικονομίας — τροποποίηση δικογράφου. Βασικές αποφάσεις: Φοινιώτης ν. Greenmar Navigation.'",
+        },
+        court_level: {
+          type: "string",
+          enum: ["supreme", "appeal"],
+          description: "Filter by court level. Use when the user asks for a specific court (Ανώτατο Δικαστήριο = supreme, Εφετείο = appeal). Leave empty for broad search across all courts.",
         },
         year_from: { type: "integer", description: "Filter: from this year" },
         year_to: { type: "integer", description: "Filter: up to this year" },
       },
-      required: ["query"],
+      required: ["query", "legal_context"],
     },
   },
 };
@@ -177,7 +143,7 @@ const CLAUDE_SEARCH_TOOL: Anthropic.Tool = {
 
 export type SearchFn = (
   query: string,
-  court?: string,
+  courtLevel?: string,
   yearFrom?: number,
   yearTo?: number,
 ) => Promise<SearchResult[]>;
@@ -202,9 +168,8 @@ interface SummaryResult {
 
 // ── Utilities ──────────────────────────────────────────
 
-function getSystem(translate: boolean): string {
-  const prompt = buildSystemPrompt();
-  return translate ? prompt + TRANSLATE_SUFFIX : prompt;
+function getSystem(): string {
+  return buildSystemPrompt();
 }
 
 function calculateCost(
@@ -218,11 +183,12 @@ function calculateCost(
 
 function formatApiError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
+  // Always log the raw error for debugging
+  console.error("[LLM] API error:", message);
   if (message.includes("maximum context length")) return "The search returned too many documents. Try a more specific query.";
   if (message.includes("rate_limit") || message.includes("429")) return "The AI service is temporarily overloaded. Please wait and try again.";
   if (message.includes("timeout") || message.includes("ETIMEDOUT")) return "The request timed out. Please try again.";
   if (message.includes("401") || message.includes("auth")) return "API authentication error.";
-  console.error("[LLM] API error:", message);
   return "An error occurred while processing your request. Please try again.";
 }
 
@@ -257,8 +223,11 @@ function getCourtLevel(court: string): string {
   return map[court] ?? "other";
 }
 
+const MAX_FULL_SUMMARIES = 10; // Top N get full summaries, rest get one-liners
+
 /**
  * Format summaries for LLM consumption — sorted by court level, relevance, year.
+ * Top MAX_FULL_SUMMARIES get full text, rest get a brief one-liner.
  */
 function formatSummariesForLLM(results: SummaryResult[]): string {
   if (results.length === 0) return "No relevant results found for this query.";
@@ -274,7 +243,11 @@ function formatSummariesForLLM(results: SummaryResult[]): string {
     return b.year - a.year;
   });
 
-  return sorted
+  const top = sorted.slice(0, MAX_FULL_SUMMARIES);
+  const rest = sorted.slice(MAX_FULL_SUMMARIES);
+
+  // Full summaries for top cases
+  const fullSection = top
     .map((r, i) => {
       const courtLabel = COURT_NAMES[r.court] ?? r.court;
       return `══════════════════════════════════════════\n` +
@@ -284,6 +257,20 @@ function formatSummariesForLLM(results: SummaryResult[]): string {
         r.summary;
     })
     .join("\n\n");
+
+  if (rest.length === 0) return fullSection;
+
+  // Brief one-liners for remaining cases
+  const briefSection = rest
+    .map((r) => {
+      const courtLabel = COURT_NAMES[r.court] ?? r.court;
+      // Extract first sentence of summary as brief description
+      const firstLine = r.summary.split("\n").find((l) => l.trim().length > 20) ?? "";
+      return `- [${r.relevance}] ${courtLabel}, ${r.year} — Document ID: ${r.docId} — ${firstLine.slice(0, 120)}`;
+    })
+    .join("\n");
+
+  return fullSection + `\n\n══════════════════════════════════════════\nΥπόλοιπες σχετικές αποφάσεις (${rest.length}):\n══════════════════════════════════════════\n${briefSection}`;
 }
 
 // ── Summarizer Agent ───────────────────────────────────
@@ -345,18 +332,23 @@ Summarize this court decision in 400-700 words:
    - MENTIONED: The topic was only briefly referenced without substantive analysis.
    - NOT ADDRESSED: The topic does not appear in the decision.
    State the level, then:
-   - If RULED: Quote the court's conclusion in original Greek + English translation.
+   - If RULED: Quote the court's conclusion in original Greek.
    - If DISCUSSED: Describe what the court analyzed. Quote the most relevant passage.
    - If MENTIONED: Note the reference briefly.
    - If NOT ADDRESSED: Write "NOT ADDRESSED."
 6. OUTCOME: What did the court order?
-7. RELEVANCE RATING: Rate as HIGH / MEDIUM / LOW / NONE and explain in one sentence.
+7. RELEVANCE RATING: Rate STRICTLY based on the engagement level above:
+   - HIGH: The court RULED on the research topic.
+   - MEDIUM: The court DISCUSSED the topic without a final conclusion.
+   - LOW: The topic was only MENTIONED in passing.
+   - NONE: The topic was NOT ADDRESSED in the decision.
+   Explain in one sentence.
 
 CRITICAL RULES:
 - ONLY state what is EXPLICITLY written in the text.
 - NEVER assume or infer a court's conclusion.
 - Distinguish between what a PARTY ARGUED and what the COURT DECIDED.
-- Include at least one EXACT QUOTE from the decision (in Greek) with English translation.
+- Include at least one EXACT QUOTE from the decision (in Greek).
 - A wrong summary is worse than no summary.
 
 Document ID: ${docId}`;
@@ -414,7 +406,10 @@ export function setSessionId(id: string) {
  * 7. Return formatted summaries to LLM
  */
 async function handleSearchAndSummarize(
+  client: OpenAI,
   query: string,
+  legalContext: string | undefined,
+  courtLevel: string | undefined,
   yearFrom: number | undefined,
   yearTo: number | undefined,
   searchFn: SearchFn,
@@ -429,19 +424,25 @@ async function handleSearchAndSummarize(
 }> {
   const fetchDoc = _fetchDocumentFn;
 
-  // 1. Vectorize search
-  const searchResults = await searchFn(query, undefined, yearFrom, yearTo);
+  // 1. Vectorize search (with optional court_level filter)
+  const searchResults = await searchFn(query, courtLevel, yearFrom, yearTo);
 
   // 2. Deduplicate — skip already-summarized docs
   const newResults = searchResults.filter(
     (r) => r.doc_id && !summarizedDocIds.has(r.doc_id),
   );
 
-  // Add to allSources for UI display
+  // Add to allSources and emit immediately — progressive display
+  const newSources: SearchResult[] = [];
   for (const r of newResults) {
     if (!allSources.some((s) => s.doc_id === r.doc_id)) {
-      allSources.push({ ...r, text: r.text.slice(0, 400) });
+      const source = { ...r, text: r.text.slice(0, 400) };
+      allSources.push(source);
+      newSources.push(source);
     }
+  }
+  if (newSources.length > 0) {
+    emit({ event: "sources", data: allSources });
   }
 
   if (newResults.length === 0 || !fetchDoc) {
@@ -459,9 +460,9 @@ async function handleSearchAndSummarize(
   });
 
   // 3. Fetch + summarize in batches of 5 (Workers limit: 6 simultaneous outgoing connections)
+  // Each summary is sent to UI immediately as it completes — progressive display
   const CONCURRENCY = 5;
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const focus = _lastUserQuery;
+  const focus = _lastUserQuery; // Always use user's original question as primary focus
   const summaryResults: SummaryResult[] = [];
 
   for (let i = 0; i < newResults.length; i += CONCURRENCY) {
@@ -470,19 +471,18 @@ async function handleSearchAndSummarize(
       batch.map(async (r) => {
         const text = await fetchDoc(r.doc_id);
         if (!text) return null;
-        return summarizeDocument(client, r.doc_id, text, focus, _lastUserQuery);
+        const result = await summarizeDocument(client, r.doc_id, text, focus, _lastUserQuery);
+        // Send each summary immediately to UI
+        if (result) {
+          emit({ event: "summaries", data: [{ docId: result.docId, summary: result.summary }] });
+        }
+        return result;
       }),
     );
     for (const result of batchResults) {
       if (result) summaryResults.push(result);
     }
   }
-
-  // Send summaries to UI for DocViewer
-  emit({
-    event: "summaries",
-    data: summaryResults.map((r) => ({ docId: r.docId, summary: r.summary })),
-  });
 
   // 5. Filter out NONE relevance, sort by court level + relevance + year, limit
   const relevant = summaryResults
@@ -532,7 +532,6 @@ async function handleSearchAndSummarize(
 export function chatStream(
   messages: ChatMessage[],
   modelKey: string,
-  translate: boolean,
   searchFn: SearchFn,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -560,7 +559,7 @@ export function chatStream(
       }
 
       try {
-        const system = getSystem(translate);
+        const system = getSystem();
         if (modelCfg.provider === "openai") {
           await streamOpenAI(messages, modelCfg, system, searchFn, emit);
         } else {
@@ -586,6 +585,7 @@ async function streamOpenAI(
 ) {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+  // Phase 1: Search — tool-calling loop with brief tool results
   const apiMessages: OpenAI.ChatCompletionMessageParam[] = [
     { role: "system", content: system },
     ...messages,
@@ -624,10 +624,23 @@ async function streamOpenAI(
 
         if (toolCall.function.name === "search_cases") {
           searchStep++;
-          emit({ event: "searching", data: { query: args.query ?? "", step: searchStep } });
+          emit({
+            event: "searching",
+            data: {
+              query: args.query ?? "",
+              step: searchStep,
+              courtLevel: args.court_level,
+              yearFrom: args.year_from,
+              yearTo: args.year_to,
+              legalContext: args.legal_context,
+            },
+          });
 
           const result = await handleSearchAndSummarize(
+            client,
             args.query ?? "",
+            args.legal_context,
+            args.court_level,
             args.year_from,
             args.year_to,
             searchFn,
@@ -640,87 +653,62 @@ async function streamOpenAI(
           summarizerOutputTokens += result.outputTokens;
           documentsAnalyzed += result.results.length;
 
+          // Brief acknowledgment for the tool-calling LLM
+          const relevant = result.results.filter((r) => r.relevance !== "NONE");
           apiMessages.push({
             role: "tool",
             tool_call_id: toolCall.id,
-            content: result.text,
+            content: relevant.length > 0
+              ? `Βρέθηκαν ${relevant.length} σχετικές αποφάσεις (από ${result.results.length} που αναλύθηκαν).`
+              : `Δεν βρέθηκαν σχετικές αποφάσεις. Δοκιμάστε διαφορετικούς όρους αναζήτησης.`,
           });
         }
       }
       continue;
     }
 
-    // No tool calls — stream the final answer
-    if (allSources.length > 0) {
-      emit({ event: "sources", data: allSources });
-    }
-
-    const stream = await client.chat.completions.create({
-      model: modelCfg.modelId,
-      messages: apiMessages,
-      temperature: 0.1,
-      stream: true,
-      stream_options: { include_usage: true },
-    });
-
-    for await (const chunk of stream) {
-      if (chunk.choices[0]?.delta?.content) {
-        emit({ event: "token", data: chunk.choices[0].delta.content });
-      }
-      if (chunk.usage) {
-        totalInputTokens += chunk.usage.prompt_tokens;
-        totalOutputTokens += chunk.usage.completion_tokens;
-      }
-    }
-
-    const mainCost = calculateCost(modelCfg, totalInputTokens, totalOutputTokens);
-    const summarizerCost = (summarizerInputTokens / 1_000_000) * 2.5 +
-                           (summarizerOutputTokens / 1_000_000) * 10;
-    const totalCost = mainCost + summarizerCost;
-
-    console.log(JSON.stringify({
-      event: "chat_complete",
-      sessionId: _sessionId,
-      provider: "openai",
-      model: modelCfg.label,
-      mainInputTokens: totalInputTokens,
-      mainOutputTokens: totalOutputTokens,
-      mainCostUsd: parseFloat(mainCost.toFixed(4)),
-      summarizerDocsAnalyzed: documentsAnalyzed,
-      summarizerInputTokens,
-      summarizerOutputTokens,
-      summarizerCostUsd: parseFloat(summarizerCost.toFixed(4)),
-      totalCostUsd: parseFloat(totalCost.toFixed(4)),
-      searchSteps: searchStep,
-      sourcesFound: allSources.length,
-    }));
-
-    emit({
-      event: "usage",
-      data: {
-        model: modelCfg.label,
-        inputTokens: totalInputTokens + summarizerInputTokens,
-        outputTokens: totalOutputTokens + summarizerOutputTokens,
-        totalTokens: totalInputTokens + totalOutputTokens + summarizerInputTokens + summarizerOutputTokens,
-        costUsd: totalCost,
-        documentsAnalyzed,
-      } as UsageData,
-    });
-    emit({ event: "done", data: {} });
-    return;
+    // No more tool calls — proceed to answer
+    break;
   }
 
-  // Exhausted rounds
-  if (allSources.length > 0) emit({ event: "sources", data: allSources });
+  // Emit sources for the UI to display — no separate answer LLM call needed
+  if (allSources.length > 0) {
+    emit({ event: "sources", data: allSources });
+  }
+
+  const mainCost = calculateCost(modelCfg, totalInputTokens, totalOutputTokens);
+  const summarizerCost = (summarizerInputTokens / 1_000_000) * 2.5 +
+                         (summarizerOutputTokens / 1_000_000) * 10;
+  const totalCost = mainCost + summarizerCost;
+
   console.log(JSON.stringify({
-    event: "chat_exhausted_rounds",
+    event: "chat_complete",
     sessionId: _sessionId,
     provider: "openai",
     model: modelCfg.label,
-    rounds: MAX_TOOL_ROUNDS,
+    mainInputTokens: totalInputTokens,
+    mainOutputTokens: totalOutputTokens,
+    mainCostUsd: parseFloat(mainCost.toFixed(4)),
+    summarizerDocsAnalyzed: documentsAnalyzed,
+    summarizerInputTokens,
+    summarizerOutputTokens,
+    summarizerCostUsd: parseFloat(summarizerCost.toFixed(4)),
+    totalCostUsd: parseFloat(totalCost.toFixed(4)),
+    searchSteps: searchStep,
     sourcesFound: allSources.length,
   }));
-  emit({ event: "token", data: "I performed multiple searches but couldn't find a complete answer. Please try rephrasing your question." });
+
+  emit({
+    event: "usage",
+    data: {
+      model: modelCfg.label,
+      inputTokens: totalInputTokens + summarizerInputTokens,
+      outputTokens: totalOutputTokens + summarizerOutputTokens,
+      totalTokens: totalInputTokens + totalOutputTokens + summarizerInputTokens + summarizerOutputTokens,
+      costUsd: totalCost,
+      documentsAnalyzed,
+    } as UsageData,
+  });
   emit({ event: "done", data: {} });
 }
 
@@ -734,7 +722,9 @@ async function streamClaude(
   emit: (event: SSEYield) => void,
 ) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+  // Phase 1: Search — tool-calling loop with brief tool results
   const apiMessages: Anthropic.MessageParam[] = messages.map((m) => ({
     role: m.role as "user" | "assistant",
     content: m.content,
@@ -775,10 +765,23 @@ async function streamClaude(
 
         if (toolUse.name === "search_cases") {
           searchStep++;
-          emit({ event: "searching", data: { query: (args.query as string) ?? "", step: searchStep } });
+          emit({
+            event: "searching",
+            data: {
+              query: (args.query as string) ?? "",
+              step: searchStep,
+              courtLevel: args.court_level as string | undefined,
+              yearFrom: args.year_from as number | undefined,
+              yearTo: args.year_to as number | undefined,
+              legalContext: args.legal_context as string | undefined,
+            },
+          });
 
           const result = await handleSearchAndSummarize(
+            openaiClient,
             (args.query as string) ?? "",
+            args.legal_context as string | undefined,
+            args.court_level as string | undefined,
             args.year_from as number | undefined,
             args.year_to as number | undefined,
             searchFn,
@@ -791,7 +794,14 @@ async function streamClaude(
           summarizerOutputTokens += result.outputTokens;
           documentsAnalyzed += result.results.length;
 
-          toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result.text });
+          const relevant = result.results.filter((r) => r.relevance !== "NONE");
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: toolUse.id,
+            content: relevant.length > 0
+              ? `Βρέθηκαν ${relevant.length} σχετικές αποφάσεις (από ${result.results.length} που αναλύθηκαν).`
+              : `Δεν βρέθηκαν σχετικές αποφάσεις.`,
+          });
         }
       }
 
@@ -799,76 +809,46 @@ async function streamClaude(
       continue;
     }
 
-    // Stream the answer
-    if (allSources.length > 0) emit({ event: "sources", data: allSources });
-
-    const stream = client.messages.stream({
-      model: modelCfg.modelId,
-      max_tokens: 8192,
-      system,
-      messages: apiMessages,
-      temperature: 0.1,
-    });
-
-    for await (const event of stream) {
-      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-        emit({ event: "token", data: event.delta.text });
-      }
-      if (event.type === "message_delta") {
-        totalOutputTokens += event.usage.output_tokens;
-      }
-    }
-
-    const finalMessage = await stream.finalMessage();
-    totalInputTokens += finalMessage.usage.input_tokens;
-
-    const mainCost = calculateCost(modelCfg, totalInputTokens, totalOutputTokens);
-    const summarizerCost = (summarizerInputTokens / 1_000_000) * 2.5 +
-                           (summarizerOutputTokens / 1_000_000) * 10;
-    const totalCost = mainCost + summarizerCost;
-
-    console.log(JSON.stringify({
-      event: "chat_complete",
-      sessionId: _sessionId,
-      provider: "anthropic",
-      model: modelCfg.label,
-      mainInputTokens: totalInputTokens,
-      mainOutputTokens: totalOutputTokens,
-      mainCostUsd: parseFloat(mainCost.toFixed(4)),
-      summarizerDocsAnalyzed: documentsAnalyzed,
-      summarizerInputTokens,
-      summarizerOutputTokens,
-      summarizerCostUsd: parseFloat(summarizerCost.toFixed(4)),
-      totalCostUsd: parseFloat(totalCost.toFixed(4)),
-      searchSteps: searchStep,
-      sourcesFound: allSources.length,
-    }));
-
-    emit({
-      event: "usage",
-      data: {
-        model: modelCfg.label,
-        inputTokens: totalInputTokens + summarizerInputTokens,
-        outputTokens: totalOutputTokens + summarizerOutputTokens,
-        totalTokens: totalInputTokens + totalOutputTokens + summarizerInputTokens + summarizerOutputTokens,
-        costUsd: totalCost,
-        documentsAnalyzed,
-      } as UsageData,
-    });
-    emit({ event: "done", data: {} });
-    return;
+    // No more tool calls — proceed to answer
+    break;
   }
 
+  // Emit sources for the UI to display — no separate answer LLM call needed
   if (allSources.length > 0) emit({ event: "sources", data: allSources });
+
+  const mainCost = calculateCost(modelCfg, totalInputTokens, totalOutputTokens);
+  const summarizerCost = (summarizerInputTokens / 1_000_000) * 2.5 +
+                         (summarizerOutputTokens / 1_000_000) * 10;
+  const totalCost = mainCost + summarizerCost;
+
   console.log(JSON.stringify({
-    event: "chat_exhausted_rounds",
+    event: "chat_complete",
     sessionId: _sessionId,
     provider: "anthropic",
     model: modelCfg.label,
-    rounds: MAX_TOOL_ROUNDS,
+    mainInputTokens: totalInputTokens,
+    mainOutputTokens: totalOutputTokens,
+    mainCostUsd: parseFloat(mainCost.toFixed(4)),
+    summarizerDocsAnalyzed: documentsAnalyzed,
+    summarizerInputTokens,
+    summarizerOutputTokens,
+    summarizerCostUsd: parseFloat(summarizerCost.toFixed(4)),
+    totalCostUsd: parseFloat(totalCost.toFixed(4)),
+    searchSteps: searchStep,
     sourcesFound: allSources.length,
   }));
-  emit({ event: "token", data: "Multiple searches performed but no complete answer found." });
+
+  emit({
+    event: "usage",
+    data: {
+      model: modelCfg.label,
+      inputTokens: totalInputTokens + summarizerInputTokens,
+      outputTokens: totalOutputTokens + summarizerOutputTokens,
+      totalTokens: totalInputTokens + totalOutputTokens + summarizerInputTokens + summarizerOutputTokens,
+      costUsd: totalCost,
+      documentsAnalyzed,
+    } as UsageData,
+  });
   emit({ event: "done", data: {} });
 }
 

@@ -187,7 +187,7 @@ E2E test queries: one-third presumption, foreign law (5 years), amending pleadin
 
 ### Architecture Decisions (DO NOT REDO)
 
-- **DO NOT add court_level filter to search_cases tool** — tried this, LLM ignores broad search and only filters Supreme Court. Court-level sorting in result formatter is the correct approach.
+- **court_level filter in search_cases**: re-added with guardrails. LLM instructed to use on at most 1 of 3 searches. `legal_context` parameter also added — passes LLM's legal analysis to summarizer as focus.
 - **DO NOT add score boost in retriever** — tried ×1.15/×1.10. Combined with filters, areiospagos dominates. Use result sorting instead.
 - **DO NOT increase MAX_DOCUMENTS above 15 on Workers** — 30 docs causes "Connection error" due to 6 simultaneous connection limit. Need Workflows or Service Bindings first.
 - **DO NOT ask LLM to do 9+ searches** — LLM ignores complex instructions. "Do 3 searches" is the reliable maximum.

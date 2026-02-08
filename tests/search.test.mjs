@@ -207,15 +207,6 @@ const TEST_CASES = [
       { type: "all_have_metadata" },
     ],
   },
-  {
-    id: "result-quality-english",
-    description: "English query should also return results (JSC collection)",
-    query: "breach of contract damages compensation",
-    assertions: [
-      { type: "min_results", count: 1 },
-      { type: "all_scores_positive" },
-    ],
-  },
 ];
 
 // ── Test Runner ────────────────────────────────────────

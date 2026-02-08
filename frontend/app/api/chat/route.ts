@@ -146,7 +146,7 @@ if (isDev) {
 }
 
 export async function POST(request: NextRequest) {
-  let body: { messages?: ChatMessage[]; model?: string; translate?: boolean; sessionId?: string };
+  let body: { messages?: ChatMessage[]; model?: string; sessionId?: string };
 
   try {
     body = await request.json();
@@ -156,7 +156,6 @@ export async function POST(request: NextRequest) {
 
   const messages = body.messages ?? [];
   const model = body.model ?? "gpt-4o";
-  const translate = body.translate ?? false;
   const sessionId = body.sessionId ?? "unknown";
 
   if (messages.length === 0) {
@@ -171,7 +170,6 @@ export async function POST(request: NextRequest) {
     event: "chat_request",
     sessionId,
     model,
-    translate,
     messageCount: messages.length,
     queryLength: userQuery.length,
     queryPreview: userQuery.slice(0, 200),
@@ -186,7 +184,7 @@ export async function POST(request: NextRequest) {
         return createBindingClient(ctx.env as unknown as CloudflareEnv);
       })();
   const searchFn = createVectorizeSearchFn(vectorizeClient);
-  const stream = chatStream(messages, model, translate, searchFn);
+  const stream = chatStream(messages, model, searchFn);
 
   return new Response(stream, {
     headers: {

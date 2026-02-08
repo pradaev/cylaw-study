@@ -24,8 +24,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid path" }, { status: 400 });
   }
 
+  // Auto-append .md if missing (LLM sometimes omits it)
+  const normalizedDocId = docId.endsWith(".md") ? docId : `${docId}.md`;
+
   try {
-    const mdText = await loadDocument(docId);
+    const mdText = await loadDocument(normalizedDocId);
 
     if (!mdText) {
       return NextResponse.json({ error: "Document not found" }, { status: 404 });
@@ -37,7 +40,7 @@ export async function GET(request: NextRequest) {
     const firstLine = mdText.split("\n")[0] ?? "";
     const title = firstLine.replace(/^#+\s*/, "").trim().slice(0, 200);
 
-    return NextResponse.json({ doc_id: docId, html, title });
+    return NextResponse.json({ doc_id: normalizedDocId, html, title });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("Doc route error:", message);

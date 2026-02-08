@@ -23,10 +23,11 @@ interface HistoryMessage {
 }
 
 const EXAMPLE_QUERIES = [
-  "Find cases where court annulled administrative decisions under Article 146",
-  "What is the precedent for unfair dismissal compensation in Cyprus?",
-  "\u0392\u03c1\u03b5\u03c2 \u03b1\u03c0\u03bf\u03c6\u03ac\u03c3\u03b5\u03b9\u03c2 \u03c3\u03c7\u03b5\u03c4\u03b9\u03ba\u03ac \u03bc\u03b5 \u03b1\u03ba\u03cd\u03c1\u03c9\u03c3\u03b7 \u03b4\u03b9\u03bf\u03b9\u03ba\u03b7\u03c4\u03b9\u03ba\u03ce\u03bd \u03c0\u03c1\u03ac\u03be\u03b5\u03c9\u03bd",
-  "Compare how different courts have ruled on property rights disputes",
+  "Βρες τις κυρίες αποφάσεις του Ανώτατου Δικαστηρίου που αναλύουν τις βασικές αρχές για την τροποποίηση δικογράφου μετά την καταχώρηση.",
+  "Βρες αποφάσεις σχετικά με την αποκλειστική χρήση κατοικίας από ένα σύζυγο.",
+  "Βρες αποφάσεις σχετικά με το άρθρο 47 του περί Αστικών Αδικημάτων Νόμου ΚΕΦ. 148",
+  "Η εφαρμογή του αλλοδαπού δικαίου σε υποθέσεις περιουσιακών διαφορών στο πλαίσιο διαδικασιών διαζυγίου κατά την τελευταία πενταετία",
+  "Πώς εφαρμόζουν τα δικαστήρια το τεκμήριο του ενός τρίτου σε υποθέσεις περιουσιακών διαφορών σε διαζύγια;",
 ];
 
 function addActivity(
@@ -47,7 +48,6 @@ export function ChatArea() {
   const [messages, setMessages] = useState<HistoryMessage[]>([]);
   const [input, setInput] = useState("");
   const [model, setModel] = useState("gpt-4o");
-  const [translate, setTranslate] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const [docViewerId, setDocViewerId] = useState<string | null>(null);
   const [assistant, setAssistant] = useState<AssistantState>({
@@ -67,11 +67,7 @@ export function ChatArea() {
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    if (chatRef.current) {
-      chatRef.current.scrollTop = chatRef.current.scrollHeight;
-    }
-  }, [messages, assistant.content, assistant.activityLog]);
+  // No auto-scroll — let the user control scroll position
 
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -106,7 +102,7 @@ export function ChatArea() {
         content: "",
         sources: [],
         activityLog: [
-          { type: "sending", text: `Sending to ${modelLabel}...`, timestamp: Date.now() },
+          { type: "sending", text: `Αποστολή στο ${modelLabel}...`, timestamp: Date.now() },
         ],
         isStreaming: true,
         usage: null,
@@ -114,19 +110,19 @@ export function ChatArea() {
 
       let lastUsage: UsageData | null = null;
       let lastActivityLog: ActivityEntry[] = [
-        { type: "sending", text: `Sending to ${modelLabel}...`, timestamp: Date.now() },
+        { type: "sending", text: `Αποστολή στο ${modelLabel}...`, timestamp: Date.now() },
       ];
 
       try {
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: apiMessages, model, translate, sessionId }),
+          body: JSON.stringify({ messages: apiMessages, model, sessionId }),
         });
 
         // Update: request sent, model is thinking
         setAssistant((prev) => {
-          const updated = addActivity(prev, "thinking", `${modelLabel} is analyzing your question...`);
+          const updated = addActivity(prev, "thinking", `Το ${modelLabel} αναλύει το ερώτημά σας...`);
           lastActivityLog = updated.activityLog;
           return updated;
         });
@@ -159,12 +155,32 @@ export function ChatArea() {
                 case "searching": {
                   const searchData = JSON.parse(data);
                   searchCount++;
+                  // Build search info string with filters
+                  const filters: string[] = [];
+                  if (searchData.courtLevel) {
+                    const courtLabels: Record<string, string> = { supreme: "Ανώτατο", appeal: "Εφετείο" };
+                    filters.push(courtLabels[searchData.courtLevel] ?? searchData.courtLevel);
+                  }
+                  if (searchData.yearFrom || searchData.yearTo) {
+                    filters.push(`${searchData.yearFrom ?? "..."}-${searchData.yearTo ?? "..."}`);
+                  }
+                  const filterStr = filters.length > 0 ? ` [${filters.join(", ")}]` : "";
+
                   setAssistant((prev) => {
-                    const updated = addActivity(
+                    // Add search line
+                    let updated = addActivity(
                       prev,
                       "searching",
-                      `Search #${searchData.step}: "${searchData.query}"`,
+                      `Αναζήτηση #${searchData.step}: "${searchData.query}"${filterStr}`,
                     );
+                    // Add legal context if present
+                    if (searchData.legalContext && searchData.step === 1) {
+                      updated = addActivity(
+                        updated,
+                        "thinking",
+                        `Νομικό πλαίσιο: ${searchData.legalContext}`,
+                      );
+                    }
                     lastActivityLog = updated.activityLog;
                     return updated;
                   });
@@ -173,15 +189,10 @@ export function ChatArea() {
                 case "sources": {
                   const sources: SearchResult[] = JSON.parse(data);
                   currentSources = sources;
-                  setAssistant((prev) => {
-                    const updated = addActivity(
-                      { ...prev, sources },
-                      "found",
-                      `Found ${sources.length} relevant cases`,
-                    );
-                    lastActivityLog = updated.activityLog;
-                    return updated;
-                  });
+                  setAssistant((prev) => ({
+                    ...prev,
+                    sources,
+                  }));
                   break;
                 }
                 case "summarizing": {
@@ -190,7 +201,7 @@ export function ChatArea() {
                     const updated = addActivity(
                       prev,
                       "analyzing",
-                      `Analyzing ${sumData.count} cases in parallel...`,
+                      `Ανάλυση ${sumData.count} αποφάσεων...`,
                     );
                     lastActivityLog = updated.activityLog;
                     return updated;
@@ -212,7 +223,7 @@ export function ChatArea() {
                   const token = data.replace(/\\n/g, "\n");
                   if (!answerText) {
                     setAssistant((prev) => {
-                      const updated = addActivity(prev, "writing", "Composing answer...");
+                      const updated = addActivity(prev, "writing", "Σύνταξη απάντησης...");
                       lastActivityLog = updated.activityLog;
                       return updated;
                     });
@@ -233,21 +244,18 @@ export function ChatArea() {
                   break;
                 }
                 case "done": {
-                  setAssistant((prev) => ({
-                    ...prev,
-                    isStreaming: false,
-                  }));
+                  // Don't set isStreaming here — handled after history message is created
                   break;
                 }
                 case "error": {
                   const errorMsg = data.replace(/\\n/g, "\n");
                   answerText = errorMsg;
                   setAssistant((prev) => {
-                    const updated = addActivity(prev, "found", `Error: ${errorMsg.slice(0, 80)}`);
+                    const updated = addActivity(prev, "found", `Σφάλμα: ${errorMsg.slice(0, 80)}`);
                     lastActivityLog = updated.activityLog;
                     return {
                       ...updated,
-                      content: `**Something went wrong:** ${errorMsg}`,
+                      content: `**Κάτι πήγε στραβά:** ${errorMsg}`,
                       isStreaming: false,
                     };
                   });
@@ -259,7 +267,7 @@ export function ChatArea() {
           }
         }
 
-        if (answerText) {
+        if (answerText || currentSources.length > 0) {
           setMessages((prev) => [
             ...prev,
             {
@@ -281,7 +289,7 @@ export function ChatArea() {
       } catch (err) {
         setAssistant((prev) => ({
           ...prev,
-          content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
+          content: `Σφάλμα: ${err instanceof Error ? err.message : "Άγνωστο σφάλμα"}`,
           isStreaming: false,
         }));
       }
@@ -289,7 +297,7 @@ export function ChatArea() {
       setIsStreaming(false);
       inputRef.current?.focus();
     },
-    [input, isStreaming, messages, model, translate],
+    [input, isStreaming, messages, model],
   );
 
   const handleKeyDown = useCallback(
@@ -317,13 +325,13 @@ export function ChatArea() {
 
   return (
     <>
-      <header className="flex items-center justify-between px-5 py-3 border-b border-zinc-800 bg-[#1a1d27] shrink-0">
-        <h1 className="text-base font-bold">Cyprus Case Law</h1>
+      <header className="flex items-center justify-between px-5 py-3 border-b border-gray-200 bg-white shrink-0">
+        <h1 className="text-base font-bold text-gray-900">Κυπριακή Νομολογία</h1>
         <div className="flex items-center gap-3">
           <select
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            className="bg-zinc-800 border border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 cursor-pointer"
+            className="bg-gray-50 border border-gray-300 rounded-md px-2.5 py-1.5 text-xs text-gray-900 cursor-pointer"
           >
             {Object.entries(MODELS).map(([key, cfg]) => (
               <option key={key} value={key}>
@@ -332,40 +340,24 @@ export function ChatArea() {
             ))}
           </select>
 
-          <label
-            className={`flex items-center gap-1 text-xs cursor-pointer select-none px-2.5 py-1.5 border rounded-md transition-colors ${
-              translate
-                ? "border-indigo-500 text-zinc-200"
-                : "border-zinc-700 text-zinc-500"
-            }`}
-          >
-            <input
-              type="checkbox"
-              checked={translate}
-              onChange={(e) => setTranslate(e.target.checked)}
-              className="hidden"
-            />
-            EN
-          </label>
-
           <button
             type="button"
             onClick={newChat}
-            className="text-xs text-zinc-400 border border-zinc-700 rounded-md px-2.5 py-1.5 hover:border-indigo-500 hover:text-zinc-200 transition-colors"
+            className="text-xs text-gray-500 border border-gray-300 rounded-md px-2.5 py-1.5 hover:border-indigo-500 hover:text-gray-900 transition-colors"
           >
-            New chat
+            Νέα συνομιλία
           </button>
         </div>
       </header>
 
       <div ref={chatRef} className="flex-1 overflow-y-auto px-5 py-6 scroll-smooth">
         {showWelcome && (
-          <div className="text-center py-16 text-zinc-500">
-            <h2 className="text-xl font-semibold text-zinc-200 mb-2">
-              Cyprus Case Law
+          <div className="text-center py-16 text-gray-500">
+            <h2 className="text-xl font-semibold text-gray-900 mb-2">
+              Κυπριακή Νομολογία
             </h2>
             <p className="text-base mb-6">
-              Search 150,000+ Cypriot court decisions in any language
+              Αναζήτηση σε 150.000+ κυπριακές δικαστικές αποφάσεις
             </p>
             <div className="flex flex-wrap gap-2 justify-center max-w-2xl mx-auto">
               {EXAMPLE_QUERIES.map((q) => (
@@ -373,7 +365,7 @@ export function ChatArea() {
                   key={q}
                   type="button"
                   onClick={() => sendMessage(q)}
-                  className="bg-[#1a1d27] border border-zinc-700/60 rounded-lg text-zinc-400 px-3.5 py-2.5 text-sm text-left leading-snug max-w-[280px] hover:border-indigo-500/60 hover:text-zinc-200 transition-colors"
+                  className="bg-gray-50 border border-gray-200 rounded-lg text-gray-600 px-3.5 py-2.5 text-sm text-left leading-snug max-w-[280px] hover:border-indigo-400 hover:text-gray-900 transition-colors"
                 >
                   {q}
                 </button>
@@ -395,7 +387,7 @@ export function ChatArea() {
           />
         ))}
 
-        {(assistant.isStreaming || assistant.content) && (
+        {(assistant.isStreaming || assistant.content || assistant.sources.length > 0) && (
           <MessageBubble
             role="assistant"
             content={assistant.content}
@@ -409,16 +401,16 @@ export function ChatArea() {
         )}
       </div>
 
-      <div className="border-t border-zinc-800 bg-[#1a1d27] px-5 py-3 shrink-0">
+      <div className="border-t border-gray-200 bg-white px-5 py-3 shrink-0">
         <div className="flex gap-2 max-w-[800px] mx-auto">
           <textarea
             ref={inputRef}
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about Cypriot court cases..."
+            placeholder="Αναζητήστε κυπριακές δικαστικές αποφάσεις..."
             rows={1}
-            className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-[15px] text-zinc-200 outline-none resize-none leading-snug min-h-[42px] max-h-[150px] focus:border-indigo-500 transition-colors placeholder:text-zinc-600"
+            className="flex-1 bg-gray-50 border border-gray-300 rounded-xl px-4 py-2.5 text-[15px] text-gray-900 outline-none resize-none leading-snug min-h-[42px] max-h-[150px] focus:border-indigo-500 transition-colors placeholder:text-gray-400"
           />
           <button
             type="button"
@@ -426,7 +418,7 @@ export function ChatArea() {
             disabled={isStreaming || !input.trim()}
             className="bg-indigo-500 text-white border-none rounded-xl px-5 text-base font-semibold h-[42px] self-end hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            Send
+            Αποστολή
           </button>
         </div>
       </div>

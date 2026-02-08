@@ -10,7 +10,7 @@ interface DocViewerProps {
 }
 
 export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
-  const [title, setTitle] = useState("Loading...");
+  const [title, setTitle] = useState("Φόρτωση...");
   const [html, setHtml] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +24,7 @@ export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
   const fetchDoc = useCallback(async (id: string) => {
     setLoading(true);
     setError(null);
-    setTitle("Loading...");
+    setTitle("Φόρτωση...");
     setHtml("");
 
     try {
@@ -43,7 +43,7 @@ export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
       setTitle(data.title ?? id);
       setHtml(data.html ?? "");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load document");
+      setError(err instanceof Error ? err.message : "Αποτυχία φόρτωσης εγγράφου");
     } finally {
       setLoading(false);
     }
@@ -70,21 +70,21 @@ export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
 
   return (
     <div
-      className="fixed inset-0 bg-black/70 z-50 flex justify-center items-center p-4 md:p-8"
+      className="fixed inset-0 bg-black/40 z-50 flex justify-center items-center p-4 md:p-8"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-[#1a1d27] border border-zinc-700/60 rounded-xl w-full max-w-[900px] max-h-[90vh] flex flex-col">
+      <div className="bg-white border border-gray-200 shadow-xl rounded-xl w-full max-w-[900px] max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex justify-between items-center px-5 py-3 border-b border-zinc-700/60">
-          <h3 className="text-sm font-medium flex-1 truncate mr-4">{title}</h3>
+        <div className="flex justify-between items-center px-5 py-3 border-b border-gray-200">
+          <h3 className="text-sm font-medium flex-1 truncate mr-4 text-gray-900">{title}</h3>
           <button
             type="button"
             onClick={onClose}
-            className="text-sm text-zinc-400 border border-zinc-700/60 rounded-md px-2.5 py-1 hover:border-indigo-500 hover:text-zinc-200 transition-colors"
+            className="text-sm text-gray-500 border border-gray-200 rounded-md px-2.5 py-1 hover:border-indigo-500 hover:text-gray-900 transition-colors"
           >
-            Close
+            Κλείσιμο
           </button>
         </div>
 
@@ -96,7 +96,7 @@ export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
               <button
                 type="button"
                 onClick={() => setSummaryExpanded(!summaryExpanded)}
-                className="flex items-center gap-2 text-xs uppercase tracking-wider text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer mb-2"
+                className="flex items-center gap-2 text-xs uppercase tracking-wider text-indigo-600 hover:text-indigo-500 transition-colors cursor-pointer mb-2"
               >
                 <svg
                   className={`w-3 h-3 transition-transform ${summaryExpanded ? "rotate-90" : ""}`}
@@ -107,12 +107,12 @@ export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                 </svg>
-                AI Analysis
+                Ανάλυση AI
               </button>
               {summaryExpanded && (
-                <div className="bg-indigo-950/30 border border-indigo-500/20 rounded-lg px-4 py-3">
+                <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3">
                   <div
-                    className="prose prose-invert prose-sm max-w-none text-zinc-300 [&_strong]:text-zinc-100"
+                    className="prose prose-sm max-w-none text-gray-700 [&_strong]:text-gray-900"
                     dangerouslySetInnerHTML={{ __html: summaryHtml }}
                   />
                 </div>
@@ -122,17 +122,17 @@ export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
 
           {/* Document content */}
           {loading && (
-            <div className="flex items-center gap-2 text-zinc-400">
-              <div className="w-4 h-4 border-2 border-zinc-600 border-t-indigo-500 rounded-full animate-spin" />
-              <span>Loading document...</span>
+            <div className="flex items-center gap-2 text-gray-500">
+              <div className="w-4 h-4 border-2 border-gray-300 border-t-indigo-500 rounded-full animate-spin" />
+              <span>Φόρτωση εγγράφου...</span>
             </div>
           )}
 
-          {error && <p className="text-red-400">{error}</p>}
+          {error && <p className="text-red-500">{error}</p>}
 
           {!loading && !error && (
             <div
-              className="doc-content prose prose-invert prose-sm max-w-none font-serif"
+              className="doc-content prose prose-sm max-w-none font-serif text-gray-800"
               dangerouslySetInnerHTML={{ __html: html }}
             />
           )}

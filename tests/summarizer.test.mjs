@@ -27,8 +27,8 @@ const TEST_CASES = [
     id: "ER-v-PR_foreign-law",
     description: "E.R v. P.R — foreign law query on an interim freezing order case",
     docId: "apofaseised/oik/2024/2320240403.md",
-    userQuery: "Application of the foreign law in property dispute cases in divorce proceedings in the last five years",
-    focus: "application of foreign law in property disputes between spouses, conflict of laws rules, which law governs marital property",
+    userQuery: "Η εφαρμογή του αλλοδαπού δικαίου σε υποθέσεις περιουσιακών διαφορών στο πλαίσιο διαδικασιών διαζυγίου κατά την τελευταία πενταετία",
+    focus: "εφαρμογή αλλοδαπού δικαίου σε περιουσιακές διαφορές μεταξύ συζύγων, κανόνες σύγκρουσης νόμων, ποιο δίκαιο διέπει τη συζυγική περιουσία",
     expected: {
       status: "interim",                     // must identify as interim
       engagementLevel: "DISCUSSED",          // court discussed but didn't rule
@@ -48,8 +48,8 @@ const TEST_CASES = [
     id: "ER-v-PR_one-third",
     description: "E.R v. P.R — one-third presumption query on an interim freezing order case",
     docId: "apofaseised/oik/2024/2320240403.md",
-    userQuery: "How courts apply the presumption of one-third in property dispute cases in divorces?",
-    focus: "presumption of one-third in property disputes, how courts determine spousal contribution percentage, application of Article 14 of Law 232/91",
+    userQuery: "Πώς εφαρμόζουν τα δικαστήρια το τεκμήριο του ενός τρίτου σε υποθέσεις περιουσιακών διαφορών σε διαζύγια;",
+    focus: "τεκμήριο του ενός τρίτου σε περιουσιακές διαφορές, πώς καθορίζουν τα δικαστήρια το ποσοστό συνεισφοράς των συζύγων, εφαρμογή Άρθρου 14 Ν. 232/91",
     expected: {
       status: "interim",
       engagementLevel: ["MENTIONED", "NOT ADDRESSED", "DISCUSSED"], // court discussed Art.14 in jurisdiction context — any of these is acceptable
@@ -70,8 +70,8 @@ const TEST_CASES = [
     id: "ER-v-PR_freezing-orders",
     description: "E.R v. P.R — freezing orders query (should be HIGH, this is what the case is about)",
     docId: "apofaseised/oik/2024/2320240403.md",
-    userQuery: "What are the prerequisites for issuing interim freezing orders (Mareva injunctions) in property disputes between spouses?",
-    focus: "prerequisites for interim freezing orders under Article 32 of the Courts Law, Mareva injunctions in family property disputes",
+    userQuery: "Ποιες είναι οι προϋποθέσεις για την έκδοση ενδιάμεσων παγοποιητικών διαταγμάτων σε περιουσιακές διαφορές μεταξύ συζύγων;",
+    focus: "προϋποθέσεις για ενδιάμεσα παγοποιητικά διατάγματα δυνάμει Άρθρου 32 του περί Δικαστηρίων Νόμου, παγοποιητικά διατάγματα σε οικογενειακές περιουσιακές διαφορές",
     expected: {
       status: "interim",
       engagementLevel: ["RULED", "DISCUSSED"], // court analyzed all 3 prerequisites and issued the order — RULED or DISCUSSED both acceptable (interim = still a ruling, just not final)
@@ -91,7 +91,7 @@ function buildPrompt(focus, userQuery, docId) {
 The lawyer's research question: "${userQuery}"
 Analysis focus: "${focus}"
 
-Summarize this court decision in 400-700 words:
+Summarize this court decision in 300-500 words:
 
 1. CASE HEADER: Parties, court, date, case number (2 lines max)
 2. STATUS: Final decision (ΑΠΟΦΑΣΗ) or interim (ΕΝΔΙΑΜΕΣΗ ΑΠΟΦΑΣΗ)?
@@ -104,8 +104,8 @@ Summarize this court decision in 400-700 words:
    - MENTIONED: The topic was only briefly referenced by a party or the court in passing, without substantive analysis.
    - NOT ADDRESSED: The topic does not appear in the decision.
    State the level, then:
-   - If RULED: Quote the court's conclusion in original Greek + English translation.
-   - If DISCUSSED: Describe what the court analyzed. Quote the most relevant passage in Greek + English. Clearly state what was NOT decided.
+   - If RULED: Quote the court's conclusion in Greek.
+   - If DISCUSSED: Describe what the court analyzed. Quote the most relevant passage in Greek. Clearly state what was NOT decided.
    - If MENTIONED: Note the reference briefly. State the court did NOT engage with it.
    - If NOT ADDRESSED: Write "NOT ADDRESSED."
 6. OUTCOME: What did the court order? (dismissed/succeeded/interim order/remanded)
@@ -123,7 +123,7 @@ CRITICAL RULES — VIOLATION IS UNACCEPTABLE:
 - NEVER say the court "ruled" on a principle when it only "discussed" or "mentioned" it.
 - Distinguish between what a PARTY ARGUED and what the COURT DECIDED.
 - Pay special attention to the LAST section of the document (ΚΑΤΑΛΗΞΗ).
-- Include at least one EXACT QUOTE from the decision (in Greek) with English translation.
+- Include at least one EXACT QUOTE from the decision (in Greek).
 - A wrong summary is worse than no summary. When in doubt, quote the original text.
 
 Document ID: ${docId}`;

@@ -39,7 +39,7 @@ function extractDocPrefix(vectorId: string): string {
 export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
   return async (
     query: string,
-    _court?: string,
+    courtLevel?: string,
     yearFrom?: number,
     yearTo?: number,
   ): Promise<SearchResult[]> => {
@@ -58,12 +58,23 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
       });
       const queryVector = embeddingResponse.data[0].embedding;
 
-      // 2. Query Vectorize (no metadata → allows topK up to 100)
-      const results = await client.query(queryVector, {
+      // 2. Query Vectorize (with optional court_level metadata filter)
+      const queryOptions: {
+        topK: number;
+        returnMetadata: "none";
+        returnValues: false;
+        filter?: Record<string, string>;
+      } = {
         topK: VECTORIZE_TOP_K,
         returnMetadata: "none",
         returnValues: false,
-      });
+      };
+
+      if (courtLevel && (courtLevel === "supreme" || courtLevel === "appeal")) {
+        queryOptions.filter = { court_level: courtLevel };
+      }
+
+      const results = await client.query(queryVector, queryOptions);
 
       if (!results.matches || results.matches.length === 0) {
         console.log(JSON.stringify({ event: "vectorize_search", query: query.slice(0, 200), chunksMatched: 0, returned: 0 }));
@@ -125,6 +136,7 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
       console.log(JSON.stringify({
         event: "vectorize_search",
         query: query.slice(0, 200),
+        courtLevel: courtLevel || null,
         yearFrom,
         yearTo,
         chunksMatched: results.matches.length,

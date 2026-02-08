@@ -43,11 +43,11 @@ function ActivityLog({ entries, isActive }: { entries: ActivityEntry[]; isActive
           <div
             key={i}
             className={`flex items-center gap-2 text-xs ${
-              isLast && isActive ? "text-zinc-300" : "text-zinc-600"
+              isLast && isActive ? "text-gray-700" : "text-gray-400"
             }`}
           >
             {showSpinner ? (
-              <div className="w-3 h-3 border-[1.5px] border-zinc-600 border-t-indigo-500 rounded-full animate-spin shrink-0" />
+              <div className="w-3 h-3 border-[1.5px] border-gray-300 border-t-indigo-500 rounded-full animate-spin shrink-0" />
             ) : (
               <span className="w-3 text-center shrink-0 text-[10px]">
                 {ACTIVITY_ICONS[entry.type]}
@@ -82,14 +82,14 @@ export function MessageBubble({
 
   return (
     <div className="mb-6 max-w-[800px] mx-auto">
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 pl-1">
-        {isUser ? "You" : "Assistant"}
+      <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-1 pl-1">
+        {isUser ? "Εσείς" : "Βοηθός"}
       </div>
       <div className={isUser ? "ml-12" : ""}>
         <div
           className={
             isUser
-              ? "bg-slate-800/60 rounded-xl rounded-br-sm px-4 py-3"
+              ? "bg-indigo-50 rounded-xl rounded-br-sm px-4 py-3"
               : "py-2"
           }
         >
@@ -149,13 +149,13 @@ export function MessageBubble({
 
         {/* Usage / cost info */}
         {usage && !isStreaming && (
-          <div className="mt-2 flex items-center gap-3 text-[11px] text-zinc-600">
+          <div className="mt-2 flex items-center gap-3 text-[11px] text-gray-400">
             <span>{usage.model}</span>
             {usage.documentsAnalyzed != null && usage.documentsAnalyzed > 0 && (
-              <span>{usage.documentsAnalyzed} cases analyzed</span>
+              <span>{usage.documentsAnalyzed} αποφάσεις</span>
             )}
             <span>{usage.totalTokens.toLocaleString()} tokens</span>
-            <span className="text-zinc-500 font-medium">{formatCost(usage.costUsd)}</span>
+            <span className="text-gray-500 font-medium">{formatCost(usage.costUsd)}</span>
           </div>
         )}
       </div>

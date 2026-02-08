@@ -8,9 +8,9 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Cyprus Case Law",
+  title: "Κυπριακή Νομολογία",
   description:
-    "AI-powered legal research assistant for Cypriot court cases. Search through 150,000+ court decisions.",
+    "Βοηθός νομικής έρευνας με τεχνητή νοημοσύνη για κυπριακές δικαστικές αποφάσεις. Αναζήτηση σε 150.000+ αποφάσεις.",
 };
 
 export default function RootLayout({
@@ -19,8 +19,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className={`${inter.variable} font-sans antialiased bg-[#0f1117] text-zinc-200`}>
+    <html lang="el">
+      <body className={`${inter.variable} font-sans antialiased bg-white text-gray-900`}>
         {children}
       </body>
     </html>
