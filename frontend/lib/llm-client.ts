@@ -17,6 +17,7 @@ import { MODELS, COURT_NAMES } from "./types";
 const MAX_TOOL_ROUNDS = 5;
 const SUMMARIZER_MODEL = "gpt-4o";
 const SUMMARIZER_MAX_TOKENS = 2000;
+const MAX_RELEVANT_PER_SEARCH = 15; // max relevant summaries sent to LLM per search call
 
 // Court-level ordering for result sorting (lower = higher priority)
 const COURT_LEVEL_ORDER: Record<string, number> = {
@@ -468,8 +469,19 @@ async function handleSearchAndSummarize(
     data: summaryResults.map((r) => ({ docId: r.docId, summary: r.summary })),
   });
 
-  // 5. Filter out NONE relevance
-  const relevant = summaryResults.filter((r) => r.relevance !== "NONE");
+  // 5. Filter out NONE relevance, sort by court level + relevance + year, limit
+  const relevant = summaryResults
+    .filter((r) => r.relevance !== "NONE")
+    .sort((a, b) => {
+      const levelA = COURT_LEVEL_ORDER[a.courtLevel] ?? 4;
+      const levelB = COURT_LEVEL_ORDER[b.courtLevel] ?? 4;
+      if (levelA !== levelB) return levelA - levelB;
+      const relA = RELEVANCE_ORDER[a.relevance] ?? 3;
+      const relB = RELEVANCE_ORDER[b.relevance] ?? 3;
+      if (relA !== relB) return relA - relB;
+      return b.year - a.year;
+    })
+    .slice(0, MAX_RELEVANT_PER_SEARCH);
 
   // Log
   let totalIn = 0;

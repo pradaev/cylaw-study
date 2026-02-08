@@ -108,10 +108,28 @@ export function MessageBubble({
                 const anchor = target.closest("a");
                 if (anchor) {
                   const href = anchor.getAttribute("href");
-                  if (href?.startsWith("/doc?doc_id=")) {
+                  if (!href) return;
+
+                  // Format 1: /doc?doc_id=path/to/file.md
+                  if (href.startsWith("/doc?doc_id=")) {
                     e.preventDefault();
                     const docId = new URL(href, "http://localhost").searchParams.get("doc_id");
                     if (docId) onSourceClick(docId);
+                    return;
+                  }
+
+                  // Format 2: /path/to/file.md (direct path to .md file)
+                  if (href.endsWith(".md") && href.startsWith("/")) {
+                    e.preventDefault();
+                    onSourceClick(href.slice(1)); // remove leading /
+                    return;
+                  }
+
+                  // Format 3: path/to/file.md (relative path)
+                  if (href.endsWith(".md") && !href.startsWith("http")) {
+                    e.preventDefault();
+                    onSourceClick(href);
+                    return;
                   }
                 }
               }}
