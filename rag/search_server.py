@@ -70,7 +70,7 @@ async def search(
     year_from: int = Query(None, description="Filter: cases from this year"),
     year_to: int = Query(None, description="Filter: cases up to this year"),
     n_results: int = Query(20, description="Number of chunk results to fetch"),
-    max_documents: int = Query(10, description="Max unique documents to return"),
+    max_documents: int = Query(30, description="Max unique documents to return"),
 ):
     """Search court cases — returns metadata only, no full text.
 

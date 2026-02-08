@@ -13,8 +13,10 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { chatStream, stubSearchFn, setFetchDocumentFn } from "@/lib/llm-client";
-import { localSearchFn, localFetchDocument } from "@/lib/local-retriever";
+import { chatStream, setFetchDocumentFn } from "@/lib/llm-client";
+import { localFetchDocument } from "@/lib/local-retriever";
+import { createVectorizeSearchFn } from "@/lib/retriever";
+import { createBindingClient, createHttpClient } from "@/lib/vectorize-client";
 import type { ChatMessage } from "@/lib/types";
 import type { FetchDocumentFn } from "@/lib/llm-client";
 
@@ -160,7 +162,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No messages" }, { status: 400 });
   }
 
-  const searchFn = isDev ? localSearchFn : stubSearchFn;
+  // Same Vectorize search in dev and production — different transport only
+  const vectorizeClient = isDev
+    ? createHttpClient()               // Dev: Cloudflare REST API (HTTPS)
+    : await (async () => {             // Production: Worker binding (zero-latency)
+        const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+        const ctx = await getCloudflareContext({ async: true });
+        return createBindingClient(ctx.env as unknown as CloudflareEnv);
+      })();
+  const searchFn = createVectorizeSearchFn(vectorizeClient);
   const stream = chatStream(messages, model, translate, searchFn);
 
   return new Response(stream, {

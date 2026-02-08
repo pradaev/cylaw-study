@@ -65,12 +65,12 @@ SEARCH RULES:
 
 WORKFLOW — you have two tools:
 1. **search_cases**: Find relevant cases. Returns metadata (title, court, year, score) but NOT full text.
-2. **summarize_documents**: After search, call this with doc_ids to get AI-generated summaries of each case focused on the user's question. This is how you read the cases.
+2. **summarize_documents**: After search, call this to get AI-generated summaries of each case focused on the user's question. The system AUTOMATICALLY includes ALL documents from your search results — you only need to specify the focus topic.
 
 ALWAYS follow this sequence:
 1. Call search_cases with your query (do multiple searches with different terms)
 2. Review the metadata results
-3. Call summarize_documents with ALL doc_ids from search results — do NOT pre-filter. You cannot judge relevance from metadata alone. The summarizer will determine actual relevance after reading the full text.
+3. Call summarize_documents — the system will automatically summarize ALL documents from your searches. You cannot judge relevance from metadata alone. The summarizer will determine actual relevance after reading the full text. Pass any doc_ids (they are ignored) and a focus string.
 4. Use the summaries to compose your answer — the summarizer provides a RELEVANCE RATING for each case. Use it to structure your response, but include ALL summarized cases.
 
 INTERPRETING CASE SUMMARIES — CRITICAL:
@@ -161,14 +161,14 @@ const SUMMARIZE_TOOL: OpenAI.ChatCompletionTool = {
   function: {
     name: "summarize_documents",
     description:
-      "Analyze and summarize court case documents. Provide doc_ids from search results and instructions on what to focus on. Each document will be read and summarized by a specialized agent.",
+      "Analyze and summarize ALL court case documents found by previous searches. The system will automatically include every document from search results — you do NOT need to list specific doc_ids. Just provide the focus topic.",
     parameters: {
       type: "object",
       properties: {
         doc_ids: {
           type: "array",
           items: { type: "string" },
-          description: "Document IDs from search_cases results to analyze.",
+          description: "Ignored — system automatically uses all documents from search results. You may pass an empty array.",
         },
         focus: {
           type: "string",
@@ -388,7 +388,7 @@ async function handleSummarizeDocuments(
   }
 
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const docIds = args.doc_ids.slice(0, 10); // Max 10 docs
+  const docIds = args.doc_ids.slice(0, 30); // Max 30 docs
 
   emit({
     event: "summarizing",
@@ -566,7 +566,10 @@ async function streamOpenAI(
             content: formatSearchResults(results),
           });
         } else if (toolCall.function.name === "summarize_documents") {
-          const result = await handleSummarizeDocuments(args, emit);
+          // Override LLM's doc_id selection — always summarize ALL found documents
+          const allDocIds = allSources.map((s) => s.doc_id);
+          const overriddenArgs = { ...args, doc_ids: allDocIds };
+          const result = await handleSummarizeDocuments(overriddenArgs, emit);
           summarizerInputTokens += result.inputTokens;
           summarizerOutputTokens += result.outputTokens;
           documentsAnalyzed += result.docCount;
@@ -703,8 +706,10 @@ async function streamClaude(
 
           toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: formatSearchResults(results) });
         } else if (toolUse.name === "summarize_documents") {
+          // Override LLM's doc_id selection — always summarize ALL found documents
+          const allDocIds = allSources.map((s) => s.doc_id);
           const result = await handleSummarizeDocuments(
-            { doc_ids: args.doc_ids as string[], focus: args.focus as string },
+            { doc_ids: allDocIds, focus: args.focus as string },
             emit,
           );
           summarizerInputTokens += result.inputTokens;

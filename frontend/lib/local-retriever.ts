@@ -54,8 +54,8 @@ export const localSearchFn: SearchFn = async (
 
   const params = new URLSearchParams({
     query,
-    n_results: "20",
-    max_documents: "10",
+    n_results: "60",
+    max_documents: "30",
   });
   if (court) params.set("court", court);
   if (yearFrom) params.set("year_from", String(yearFrom));

@@ -22,7 +22,9 @@ User -> Next.js (Cloudflare Worker) -> API Routes
 - **Document fetch in dev**: S3 HTTP API to real R2 (`r2FetchViaS3` in `frontend/app/api/chat/route.ts`)
 - **Document fetch in prod**: R2 Worker binding (`r2FetchViaBinding`)
 - **Vector search**: Cloudflare Vectorize index `cylaw-search` (PRODUCTION — see warning below)
-- **Search in dev**: Python server (`rag/search_server.py`) -> local ChromaDB (legacy, for offline dev)
+- **Search in dev**: Same Vectorize index via Cloudflare REST API (`frontend/lib/vectorize-client.ts`)
+- **Search in prod**: Vectorize Worker binding (zero-latency, no auth needed)
+- **Search abstraction**: `VectorizeClient` interface in `frontend/lib/vectorize-client.ts` — single search codebase for dev and prod
 - **Auth**: Cloudflare Zero Trust (email OTP)
 
 ### PRODUCTION WARNING — Vectorize Index
@@ -50,11 +52,13 @@ User -> Next.js (Cloudflare Worker) -> API Routes
 ## What Works Now
 
 - **Chat UI** — Perplexity-style, SSE streaming, multi-model (GPT-4o, o3-mini, Claude Sonnet 4) — `frontend/app/page.tsx`
-- **Multi-agent summarizer** — parallel GPT-4o agents analyze up to 10 full court docs per query — `frontend/lib/llm-client.ts`
+- **Multi-agent summarizer** — parallel GPT-4o agents analyze up to 30 full court docs per query, auto-summarizes ALL search results — `frontend/lib/llm-client.ts`
 - **Document viewer** — click any case to read full text with AI summary panel — `frontend/app/api/doc/route.ts`
 - **R2 integration** — all 149,886 docs in R2, fetched in both dev (S3 API) and prod (binding) — `frontend/app/api/chat/route.ts`
 - **Vectorize populated** — all 15 courts embedded via OpenAI Batch API, ~2.27M vectors in `cylaw-search` index — `scripts/batch_ingest.py`
 - **Data pipeline** — scrape, download, parse, chunk, embed for all 15 courts — `scraper/`, `rag/`, `scripts/`
+- **Vectorize search wired into frontend** — unified client for dev (REST API) and prod (binding), returns up to 30 unique docs — `frontend/lib/retriever.ts`, `frontend/lib/vectorize-client.ts`
+- **Auto-summarization** — LLM's doc_id selection overridden; system always summarizes ALL documents from search results — `frontend/lib/llm-client.ts`
 - **Local search (legacy)** — ChromaDB with ~2.3M chunks (original 9 courts) — `rag/search_server.py`
 - **Production deployment** — https://cyprus-case-law.cylaw-study.workers.dev — `frontend/wrangler.jsonc`
 - **Cost tracking** — per-request token/cost display in UI — `frontend/components/ChatArea.tsx`
@@ -64,11 +68,7 @@ User -> Next.js (Cloudflare Worker) -> API Routes
 
 ### High Priority
 
-1. **Wire Vectorize into frontend** — production search is currently a stub
-   - Write `frontend/lib/retriever.ts` (query Vectorize, embed query via OpenAI)
-   - Wire retriever into `frontend/app/api/chat/route.ts` replacing `stubSearchFn`
-   - Add Vectorize binding to `frontend/wrangler.jsonc` (currently commented out)
-   - Re-deploy
+1. **Re-deploy to production** — Vectorize is wired in locally, needs `wrangler deploy`
 
 ### Medium Priority
 
@@ -165,6 +165,9 @@ This is complex and should be evaluated after improvements 1-3 are live.
 - Port 3000 is often taken by Docker. Next.js dev server usually runs on 3001.
 - HTML files from cylaw.org use ISO-8859-7 / Windows-1253 encoding (Greek).
 - **Vector ID length limit**: Vectorize max is 64 bytes. Long doc_ids are hashed via MD5 (first 16 hex chars). The `make_vector_id()` helper handles this — used in `batch_ingest.py`, `ingest_to_vectorize.py`, `export_to_vectorize.py`, and `migrate_to_cloudflare.py`.
+- **Vectorize topK limit**: `returnMetadata: "all"` limits `topK` to 20. Use `returnMetadata: "none"` with `topK: 100`, then `getByIds()` for metadata. See `frontend/lib/retriever.ts`.
+- **Vectorize REST API `getByIds` limit**: max 20 IDs per request. `createHttpClient()` in `vectorize-client.ts` batches automatically.
+- **Dev Vectorize access** requires `CLOUDFLARE_API_TOKEN` in `frontend/.env.local` (copies from root `.env`).
 - **ChromaDB is legacy** — `chromadb_local` and `chromadb_openai` contain vectors from original 9 courts only. Not all 15 courts. Use Vectorize for production search.
 - **Batch data** — `data/batch_embed/` contains OpenAI Batch API state, metadata index, and batch JSONL files. Safe to delete after successful ingestion (can be recreated with `batch_ingest.py prepare`).
 
@@ -180,26 +183,27 @@ This is complex and should be evaluated after improvements 1-3 are live.
 
 ## Last Session Log
 
+### 2026-02-08 (Vectorize frontend integration + auto-summarization)
+- Wired Vectorize `cylaw-search` into frontend as primary search for both dev and prod
+- Created `frontend/lib/vectorize-client.ts` — `VectorizeClient` abstraction with two implementations:
+  - `createBindingClient()` for production (Worker binding, zero-latency)
+  - `createHttpClient()` for development (Cloudflare REST API over HTTPS)
+- Created `frontend/lib/retriever.ts` — two-step query strategy to bypass Vectorize topK=20 limit with metadata:
+  1. Query with `returnMetadata: "none"` and `topK: 100` for broad ID retrieval
+  2. Group by doc_id prefix, take top 30 unique docs, fetch metadata via `getByIds()`
+- Fixed `getByIds` batching — Vectorize REST API limits to 20 IDs per request
+- Updated `frontend/app/api/chat/route.ts` — replaced `stubSearchFn`/`localSearchFn` with unified Vectorize search
+- Increased max unique documents from 10 to 30 across all search paths
+- **Auto-summarization**: LLM's `summarize_documents` doc_id selection now overridden — system always passes ALL doc_ids from `allSources` (both OpenAI and Claude providers)
+- Updated tool description and system prompt to reflect automatic summarization
+- All summarizer eval tests pass: 28/28 assertions, 0 failed
+- TypeScript compiles cleanly
+
 ### 2026-02-07 (evening session — Vectorize ingestion)
-- Analyzed existing ingestion scripts (`ingest_to_vectorize.py`, `migrate_to_cloudflare.py`)
-- Ran test ingestion of 1000 docs into Vectorize — confirmed pipeline works
-- Started full ingestion with `ingest_to_vectorize.py` — hit rate limiting issues (~60 ch/s)
-- Optimized: implemented TokenBucket rate limiter, adjusted batch sizes, measured actual tokens/chunk (~1300)
-- Fixed vector ID length errors (>64 bytes) — implemented `make_vector_id()` with MD5 hashing across all scripts
-- Speed still too slow (~5 hours projected) — switched to **OpenAI Batch API**
-- Created `scripts/batch_ingest.py` — 3-step pipeline: prepare (chunk+JSONL), submit (Batch API), collect (download+upload)
-- Prepared 46 batches (2,269,231 chunks), submitted all to OpenAI Batch API
-- All 46 batches completed successfully (1 request failed out of ~23,000)
-- Rewrote `step_collect` with parallel downloads (2 threads) and parallel Vectorize uploads (6 threads) for ~6x speedup
-- Marked Vectorize index `cylaw-search` as PRODUCTION in documentation
+- Created `scripts/batch_ingest.py` — OpenAI Batch API pipeline for Vectorize ingestion
+- All 46 batches completed (2,269,231 chunks), ~$15 cost
+- Marked Vectorize index `cylaw-search` as PRODUCTION
 
 ### 2026-02-07 (afternoon session)
-- Analyzed HTML structure of court cases for separating witness testimony from court reasoning
-- Added R2 document fetching to chat route (`r2FetchViaBinding` for prod, `r2FetchViaS3` for dev)
-- Deployed Phase 1 to Cloudflare Workers, set secrets (OPENAI_API_KEY, ANTHROPIC_API_KEY)
-- Updated README.md with current architecture, status table, deployment instructions
-
-### 2026-02-07 (morning session)
-- Next.js frontend rewrite, React chat UI, multi-agent summarization, cost tracking
-- Scraped and parsed all 6 remaining courts (86,630 cases), total 149,886 files
-- R2 bucket upload, Cloudflare Workers deployment
+- Added R2 document fetching, deployed Phase 1 to Cloudflare Workers
+- Set secrets, updated README with architecture

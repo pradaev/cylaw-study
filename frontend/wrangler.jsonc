@@ -19,12 +19,11 @@
       "binding": "DOCS_BUCKET",
       "bucket_name": "cyprus-case-law-docs"
     }
+  ],
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "cylaw-search"
+    }
   ]
-  // Phase 2: Vectorize binding (uncomment when vectorization completes)
-  // "vectorize": [
-  //   {
-  //     "binding": "VECTORIZE",
-  //     "index_name": "cylaw-cases"
-  //   }
-  // ]
 }
