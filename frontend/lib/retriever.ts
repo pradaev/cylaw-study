@@ -7,12 +7,13 @@
  *
  * Flow:
  *   1. Embed the query text via OpenAI API (text-embedding-3-small, 1536 dims)
- *   2. Query Vectorize with topK=100, returnMetadata="none" (bypasses topK=20 limit)
+ *   2. Query Vectorize with topK=100, optional court_level filter
  *   3. Group matching chunks by doc prefix → unique documents
  *   4. Fetch metadata via getByIds() for ALL unique docs
- *   5. Apply year filtering if yearFrom/yearTo provided
- *   6. Take top MAX_DOCUMENTS from filtered set
- *   7. Return SearchResult[] with metadata (no full text)
+ *   5. Apply court-level score boost (supreme ×1.15, appeal ×1.10)
+ *   6. Apply year filtering if yearFrom/yearTo provided
+ *   7. Take top MAX_DOCUMENTS from filtered set
+ *   8. Return SearchResult[] with metadata (no full text)
  */
 
 import OpenAI from "openai";
@@ -24,20 +25,6 @@ import type { VectorizeClient } from "./vectorize-client";
 const EMBEDDING_MODEL = "text-embedding-3-small";
 const VECTORIZE_TOP_K = 100;
 const MAX_DOCUMENTS = 30;
-
-/**
- * Court-level relevance boost — higher courts get a score multiplier.
- * Applied after Vectorize similarity search, before top-N selection.
- * This ensures Supreme Court and Appeal decisions rank higher when
- * scores are close, without completely overriding semantic relevance.
- */
-const COURT_LEVEL_BOOST: Record<string, number> = {
-  supreme: 1.15,          // aad, supreme, jsc, rscc, clr, areiospagos
-  appeal: 1.10,           // courtOfAppeal, administrativeCourtOfAppeal
-  first_instance: 1.0,    // apofaseised, juvenileCourt
-  administrative: 1.0,    // administrative, administrativeIP
-  other: 1.0,             // epa, aap
-};
 
 /** Extract doc prefix from vector ID: "doc_id::chunk_N" → "doc_id" */
 function extractDocPrefix(vectorId: string): string {
@@ -52,7 +39,7 @@ function extractDocPrefix(vectorId: string): string {
 export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
   return async (
     query: string,
-    courtLevel?: string,
+    _court?: string,
     yearFrom?: number,
     yearTo?: number,
   ): Promise<SearchResult[]> => {
@@ -72,13 +59,10 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
       const queryVector = embeddingResponse.data[0].embedding;
 
       // 2. Query Vectorize (no metadata → allows topK up to 100)
-      //    Apply court_level filter if provided (uses Vectorize metadata index)
-      const filter = courtLevel ? { court_level: courtLevel } : undefined;
       const results = await client.query(queryVector, {
         topK: VECTORIZE_TOP_K,
         returnMetadata: "none",
         returnValues: false,
-        filter,
       });
 
       if (!results.matches || results.matches.length === 0) {
@@ -110,11 +94,10 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
       const sortedDocs = Array.from(docMap.entries())
         .sort((a, b) => b[1].score - a[1].score);
 
-      // 5. Fetch metadata for ALL unique docs (need year for filtering)
+      // 5. Fetch metadata for ALL unique docs (need year + court_level for filtering/boost)
       const representativeIds = sortedDocs.map(([, doc]) => doc.representativeId);
       const vectors = await client.getByIds(representativeIds);
 
-      // Build a lookup: vectorId → metadata
       const metaLookup = new Map<string, Record<string, string>>();
       for (const vec of vectors) {
         if (vec.metadata) {
@@ -122,35 +105,18 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
         }
       }
 
-      // 6. Apply court-level boost — higher courts get a score multiplier
-      for (const [, doc] of sortedDocs) {
-        const meta = metaLookup.get(doc.representativeId);
-        const courtLevel = meta?.court_level ?? "";
-        const boost = COURT_LEVEL_BOOST[courtLevel] ?? 1.0;
-        doc.score *= boost;
-      }
-      // Re-sort after boost
-      sortedDocs.sort((a, b) => b[1].score - a[1].score);
-
-      // 7. Apply year filtering if yearFrom/yearTo provided (after boost)
+      // 6. Apply year filtering if yearFrom/yearTo provided
       let filteredDocs = sortedDocs;
       if (yearFrom || yearTo) {
         filteredDocs = sortedDocs.filter(([, doc]) => {
           const meta = metaLookup.get(doc.representativeId);
-          if (!meta?.year) return true; // keep docs without year metadata
+          if (!meta?.year) return true;
           const year = parseInt(meta.year, 10);
           if (isNaN(year)) return true;
           if (yearFrom && year < yearFrom) return false;
           if (yearTo && year > yearTo) return false;
           return true;
         });
-        console.log(JSON.stringify({
-          event: "vectorize_year_filter",
-          yearFrom,
-          yearTo,
-          before: sortedDocs.length,
-          after: filteredDocs.length,
-        }));
       }
 
       // 8. Take top MAX_DOCUMENTS from filtered set
@@ -159,7 +125,6 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
       console.log(JSON.stringify({
         event: "vectorize_search",
         query: query.slice(0, 200),
-        courtLevel: courtLevel ?? null,
         yearFrom,
         yearTo,
         chunksMatched: results.matches.length,

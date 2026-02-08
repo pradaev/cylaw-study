@@ -68,6 +68,7 @@ CF_API_BASE = "https://api.cloudflare.com/client/v4"
 
 INPUT_DIR = PROJECT_ROOT / "data" / "cases_parsed"
 BATCH_DIR = PROJECT_ROOT / "data" / "batch_embed"
+EMBEDDINGS_DIR = BATCH_DIR / "embeddings"  # cached OpenAI batch results
 STATE_FILE = BATCH_DIR / "state.json"
 META_FILE = BATCH_DIR / "chunks_meta.jsonl"
 
@@ -452,8 +453,70 @@ def _parse_batch_vectors(content_text: str, meta_index: list) -> list:
     return vectors
 
 
+def step_download() -> None:
+    """Download all batch results from OpenAI and save to disk.
+
+    Saves each batch output as a JSONL file in data/batch_embed/embeddings/.
+    Once downloaded, collect/reupload will use local files (no re-download).
+    """
+    state = load_state()
+    if state["phase"] not in ("submitted", "collecting", "done"):
+        print(f"Current phase: {state['phase']}. Run submit first.")
+        return
+
+    openai_key = os.environ["OPENAI_API_KEY"]
+    EMBEDDINGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    to_download = [
+        b for b in state["batches"]
+        if b["status"] == "completed" and b.get("output_file_id")
+    ]
+
+    # Skip already downloaded
+    to_download = [
+        b for b in to_download
+        if not _embedding_file(b).exists()
+    ]
+
+    if not to_download:
+        already = sum(1 for b in state["batches"] if _embedding_file(b).exists())
+        print(f"\nAll {already} batch files already downloaded in {EMBEDDINGS_DIR}/")
+        return
+
+    print(f"\nDownloading {len(to_download)} batch files from OpenAI...")
+
+    DOWNLOAD_WORKERS = 10
+    download_pool = concurrent.futures.ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS)
+    t0 = time.time()
+
+    def download_and_save(b: dict) -> str:
+        client = OpenAI(api_key=openai_key)
+        content = client.files.content(b["output_file_id"])
+        out_path = _embedding_file(b)
+        out_path.write_text(content.text, encoding="utf-8")
+        return Path(b["file"]).name
+
+    futures = {download_pool.submit(download_and_save, b): b for b in to_download}
+    done = 0
+    for future in concurrent.futures.as_completed(futures):
+        done += 1
+        fname = future.result()
+        elapsed = time.time() - t0
+        print(f"  [{done}/{len(to_download)}] {fname} saved ({elapsed:.0f}s)", flush=True)
+
+    download_pool.shutdown(wait=False)
+    total = sum(1 for b in state["batches"] if _embedding_file(b).exists())
+    print(f"\nDone! {total} embedding files in {EMBEDDINGS_DIR}/")
+
+
+def _embedding_file(b: dict) -> Path:
+    """Path to cached embedding file for a batch."""
+    fname = Path(b["file"]).stem + "_embeddings.jsonl"
+    return EMBEDDINGS_DIR / fname
+
+
 def step_collect() -> None:
-    """Download embedding results and upload to Vectorize — parallel."""
+    """Upload embeddings to Vectorize — uses local files if available, downloads if not."""
     state = load_state()
     if state["phase"] not in ("submitted", "collecting", "done"):
         print(f"Current phase: {state['phase']}. Run submit first.")
@@ -497,30 +560,35 @@ def step_collect() -> None:
     total_failed = 0
     t0 = time.time()
 
-    # Parallel pipeline:
-    #   - Download pool: 6 threads fetching batch files from OpenAI in parallel
-    #   - Upload pool: 6 threads uploading NDJSON chunks to Vectorize in parallel
-    #   - As each download completes, its vectors are parsed and queued for upload
+    # Pipeline: load embeddings (local disk or OpenAI) then upload to Vectorize
     DOWNLOAD_WORKERS = 10
     download_pool = concurrent.futures.ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS)
     upload_pool = concurrent.futures.ThreadPoolExecutor(max_workers=UPLOAD_WORKERS)
 
-    def download_batch(b: dict) -> tuple:
-        """Download one batch result from OpenAI."""
+    EMBEDDINGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    def load_batch(b: dict) -> tuple:
+        """Load embeddings from local cache, or download from OpenAI and cache."""
+        cached = _embedding_file(b)
+        if cached.exists():
+            return b, cached.read_text(encoding="utf-8"), "disk"
+        # Download and save for next time
         client = OpenAI(api_key=openai_key)
         content = client.files.content(b["output_file_id"])
-        return b, content.text
+        cached.write_text(content.text, encoding="utf-8")
+        return b, content.text, "openai"
 
-    # Submit ALL downloads at once — pool limits concurrency to DOWNLOAD_WORKERS
-    download_futures = {
-        download_pool.submit(download_batch, b): b for b in to_collect
+    # Submit ALL loads at once — pool limits concurrency
+    load_futures = {
+        download_pool.submit(load_batch, b): b for b in to_collect
     }
 
     batch_num = 0
-    for future in concurrent.futures.as_completed(download_futures):
+    for future in concurrent.futures.as_completed(load_futures):
         batch_num += 1
-        b, content_text = future.result()
+        b, content_text, source = future.result()
         fname = Path(b["file"]).name
+        source_label = "cached" if source == "disk" else "downloaded"
 
         # Parse vectors
         vectors = _parse_batch_vectors(content_text, meta_index)
@@ -550,7 +618,7 @@ def step_collect() -> None:
         elapsed = time.time() - t0
         rate = total_uploaded / elapsed if elapsed > 0 else 0
 
-        print(f"  [{batch_num}/{len(to_collect)}] {fname}: "
+        print(f"  [{batch_num}/{len(to_collect)}] {fname} ({source_label}): "
               f"{batch_uploaded:,} uploaded "
               f"({total_uploaded:,} total, {rate:,.0f} vec/s)", flush=True)
 
@@ -726,7 +794,7 @@ def main():
     )
     parser.add_argument(
         "command",
-        choices=["prepare", "submit", "status", "collect", "reupload", "full-reset", "run", "reset"],
+        choices=["prepare", "submit", "status", "download", "collect", "reupload", "full-reset", "run", "reset"],
         help="Pipeline step to run",
     )
     parser.add_argument("--limit", type=int, default=None)
@@ -764,6 +832,8 @@ def main():
         step_submit()
     elif args.command == "status":
         step_status()
+    elif args.command == "download":
+        step_download()
     elif args.command == "collect":
         step_collect()
     elif args.command == "reupload":

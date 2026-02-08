@@ -10,6 +10,7 @@
     "test": "node ../tests/run.mjs",
     "test:fast": "node ../tests/run.mjs --fast",
     "test:integration": "node ../tests/run.mjs --verbose",
+    "test:e2e": "node ../tests/e2e.test.mjs --verbose",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"

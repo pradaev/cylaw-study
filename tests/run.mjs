@@ -25,6 +25,7 @@ const FRONTEND = join(ROOT, "frontend");
 const args = process.argv.slice(2);
 const FAST_ONLY = args.includes("--fast");
 const VERBOSE = args.includes("--verbose");
+const INCLUDE_E2E = args.includes("--e2e");
 
 // ── Test Suite Definitions ─────────────────────────────
 
@@ -54,6 +55,15 @@ const INTEGRATION_TESTS = [
     cwd: ROOT,
     envRequired: ["OPENAI_API_KEY"],
     dataRequired: "data/cases_parsed/apofaseised/oik/2024/2320240403.md",
+  },
+];
+
+const E2E_TESTS = [
+  {
+    name: "E2E Pipeline",
+    cmd: `node tests/e2e.test.mjs${VERBOSE ? " --verbose" : ""}`,
+    cwd: ROOT,
+    envRequired: ["OPENAI_API_KEY"],
   },
 ];
 
@@ -134,6 +144,26 @@ if (!FAST_ONLY) {
       console.log(`  ✗ ${test.name} FAILED (${elapsed}s)\n`);
     }
     results.push({ name: test.name, result, category: "integration" });
+  }
+}
+
+// E2E tests (only with --e2e flag)
+if (INCLUDE_E2E) {
+  console.log("\n── E2E pipeline tests ──\n");
+  for (const test of E2E_TESTS) {
+    console.log(`  ${test.name}:`);
+    const t0 = Date.now();
+    const result = run(test);
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+
+    if (result === "pass") {
+      console.log(`  ✓ ${test.name} passed (${elapsed}s)\n`);
+    } else if (result === "skip") {
+      console.log();
+    } else {
+      console.log(`  ✗ ${test.name} FAILED (${elapsed}s)\n`);
+    }
+    results.push({ name: test.name, result, category: "e2e" });
   }
 }
 
