@@ -449,19 +449,31 @@ async function handleSearchAndSummarize(
     data: { count: newResults.length, focus: _lastUserQuery },
   });
 
-  // 3. Fetch full texts in parallel
-  const docTexts = await Promise.all(
-    newResults.map(async (r) => ({ id: r.doc_id, text: await fetchDoc(r.doc_id) })),
-  );
+  // 3. Fetch full texts in batches of 10 (avoid overwhelming R2/network)
+  const FETCH_BATCH = 10;
+  const docTexts: { id: string; text: string | null }[] = [];
+  for (let i = 0; i < newResults.length; i += FETCH_BATCH) {
+    const batch = newResults.slice(i, i + FETCH_BATCH);
+    const batchTexts = await Promise.all(
+      batch.map(async (r) => ({ id: r.doc_id, text: await fetchDoc(r.doc_id) })),
+    );
+    docTexts.push(...batchTexts);
+  }
 
-  // 4. Summarize in parallel
+  // 4. Summarize in batches of 10 (avoid Worker timeout from too many parallel OpenAI calls)
+  const SUMMARIZE_BATCH = 10;
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const focus = _lastUserQuery;
-  const summaryResults = await Promise.all(
-    docTexts
-      .filter((d) => d.text !== null)
-      .map((d) => summarizeDocument(client, d.id, d.text!, focus, _lastUserQuery)),
-  );
+  const docsToSummarize = docTexts.filter((d) => d.text !== null);
+  const summaryResults: SummaryResult[] = [];
+
+  for (let i = 0; i < docsToSummarize.length; i += SUMMARIZE_BATCH) {
+    const batch = docsToSummarize.slice(i, i + SUMMARIZE_BATCH);
+    const batchResults = await Promise.all(
+      batch.map((d) => summarizeDocument(client, d.id, d.text!, focus, _lastUserQuery)),
+    );
+    summaryResults.push(...batchResults);
+  }
 
   // Send summaries to UI for DocViewer
   emit({
