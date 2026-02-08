@@ -24,7 +24,7 @@ import type { VectorizeClient } from "./vectorize-client";
 
 const EMBEDDING_MODEL = "text-embedding-3-small";
 const VECTORIZE_TOP_K = 100;
-const MAX_DOCUMENTS = 30;
+const MAX_DOCUMENTS = 15; // keep low to avoid Worker timeout (each doc = R2 fetch + GPT-4o summarize)
 
 /** Extract doc prefix from vector ID: "doc_id::chunk_N" → "doc_id" */
 function extractDocPrefix(vectorId: string): string {
