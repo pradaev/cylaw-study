@@ -191,46 +191,65 @@ interface SourceListProps {
 const RELEVANCE_ORDER: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2, NONE: 3 };
 
 export function SourceList({ sources, summaryCache, onSourceClick }: SourceListProps) {
-  // Filter out NONE relevance — only show HIGH, MEDIUM, LOW
-  const filtered = useMemo(() => {
-    return sources.filter((s) => {
-      const summary = summaryCache?.[s.doc_id];
-      if (!summary) return true; // no summary yet = keep (might be loading)
-      const rel = parseRelevance(summary);
-      return rel !== "NONE" && rel !== null;
-    });
-  }, [sources, summaryCache]);
-
-  // Sort: relevance (HIGH → MEDIUM → LOW) then year descending
-  const sorted = useMemo(() => {
-    return [...filtered].sort((a, b) => {
-      const sumA = summaryCache?.[a.doc_id];
-      const sumB = summaryCache?.[b.doc_id];
-      const relA = sumA ? parseRelevance(sumA) : null;
-      const relB = sumB ? parseRelevance(sumB) : null;
-      const orderA = relA ? (RELEVANCE_ORDER[relA] ?? 4) : 4;
-      const orderB = relB ? (RELEVANCE_ORDER[relB] ?? 4) : 4;
-      if (orderA !== orderB) return orderA - orderB;
-      const yearA = parseInt(a.year, 10) || 0;
-      const yearB = parseInt(b.year, 10) || 0;
-      return yearB - yearA;
-    });
-  }, [filtered, summaryCache]);
-
-  if (filtered.length === 0) return null;
-
-  // Count by relevance
-  const summarized = summaryCache
-    ? filtered.filter((s) => summaryCache[s.doc_id]).length
+  const summarizedCount = summaryCache
+    ? sources.filter((s) => summaryCache[s.doc_id]).length
     : 0;
+  const allDone = summarizedCount === sources.length && sources.length > 0;
+
+  // Only show cards after ALL summaries are ready — filter NONE, sort by relevance
+  const displayList = useMemo(() => {
+    if (!allDone) return [];
+    return [...sources]
+      .filter((s) => {
+        const summary = summaryCache?.[s.doc_id];
+        if (!summary) return false;
+        const rel = parseRelevance(summary);
+        return rel !== "NONE" && rel !== null;
+      })
+      .sort((a, b) => {
+        const sumA = summaryCache?.[a.doc_id];
+        const sumB = summaryCache?.[b.doc_id];
+        const relA = sumA ? parseRelevance(sumA) : null;
+        const relB = sumB ? parseRelevance(sumB) : null;
+        const orderA = relA ? (RELEVANCE_ORDER[relA] ?? 4) : 4;
+        const orderB = relB ? (RELEVANCE_ORDER[relB] ?? 4) : 4;
+        if (orderA !== orderB) return orderA - orderB;
+        const yearA = parseInt(a.year, 10) || 0;
+        const yearB = parseInt(b.year, 10) || 0;
+        return yearB - yearA;
+      });
+  }, [sources, summaryCache, allDone]);
+
+  if (sources.length === 0) return null;
+
+  // While loading: show progress bar
+  if (!allDone) {
+    const pct = sources.length > 0 ? Math.round((summarizedCount / sources.length) * 100) : 0;
+    return (
+      <div className="mt-4">
+        <div className="flex items-center gap-3 text-sm text-gray-500">
+          <div className="w-4 h-4 border-2 border-gray-300 border-t-indigo-500 rounded-full animate-spin shrink-0" />
+          <span>Ανάλυση αποφάσεων: {summarizedCount}/{sources.length} ({pct}%)</span>
+        </div>
+        <div className="mt-2 w-full bg-gray-100 rounded-full h-1.5">
+          <div
+            className="bg-indigo-500 h-1.5 rounded-full transition-all duration-300"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (displayList.length === 0) return null;
 
   return (
     <div className="mt-4">
       <div className="text-[11px] uppercase tracking-wider text-gray-500 mb-2">
-        Πηγές ({filtered.length} αποφάσεις{summarized > 0 ? `, ${summarized} αναλυμένες` : ""})
+        Πηγές ({displayList.length} σχετικές αποφάσεις από {sources.length} που αναλύθηκαν)
       </div>
       <div className="space-y-1.5">
-        {sorted.map((s) => (
+        {displayList.map((s) => (
           <SourceCard
             key={s.doc_id}
             source={s}

@@ -337,12 +337,7 @@ Summarize this court decision in 400-700 words:
    - If MENTIONED: Note the reference briefly.
    - If NOT ADDRESSED: Write "NOT ADDRESSED."
 6. OUTCOME: What did the court order?
-7. RELEVANCE RATING: Rate STRICTLY based on the engagement level above:
-   - HIGH: The court RULED on the research topic.
-   - MEDIUM: The court DISCUSSED the topic without a final conclusion.
-   - LOW: The topic was only MENTIONED in passing.
-   - NONE: The topic was NOT ADDRESSED in the decision.
-   Explain in one sentence.
+7. RELEVANCE RATING: Rate as HIGH / MEDIUM / LOW / NONE and explain in one sentence.
 
 CRITICAL RULES:
 - ONLY state what is EXPLICITLY written in the text.
@@ -396,135 +391,90 @@ export function setSessionId(id: string) {
 }
 
 /**
- * Search + summarize in one step.
- * 1. Run Vectorize search
- * 2. Deduplicate against already-summarized doc_ids
- * 3. Fetch full text from R2
- * 4. Summarize each document in parallel
- * 5. Filter out NONE relevance
- * 6. Sort by court level + relevance + year
- * 7. Return formatted summaries to LLM
+ * Phase 1: Search only — Vectorize search, deduplicate, return doc_ids.
+ * Fast (~2s per call). No summarization.
  */
-async function handleSearchAndSummarize(
-  client: OpenAI,
+async function handleSearch(
   query: string,
-  legalContext: string | undefined,
   courtLevel: string | undefined,
   yearFrom: number | undefined,
   yearTo: number | undefined,
   searchFn: SearchFn,
-  summarizedDocIds: Set<string>,
+  seenDocIds: Set<string>,
   allSources: SearchResult[],
   emit: (event: SSEYield) => void,
-): Promise<{
-  text: string;
-  results: SummaryResult[];
-  inputTokens: number;
-  outputTokens: number;
-}> {
-  const fetchDoc = _fetchDocumentFn;
-
-  // 1. Vectorize search (with optional court_level filter)
+): Promise<SearchResult[]> {
   const searchResults = await searchFn(query, courtLevel, yearFrom, yearTo);
 
-  // 2. Deduplicate — skip already-summarized docs
+  // Deduplicate — skip already-seen docs
   const newResults = searchResults.filter(
-    (r) => r.doc_id && !summarizedDocIds.has(r.doc_id),
+    (r) => r.doc_id && !seenDocIds.has(r.doc_id),
   );
 
-  // Add to allSources and emit immediately — progressive display
-  const newSources: SearchResult[] = [];
+  // Track and emit sources immediately
   for (const r of newResults) {
+    seenDocIds.add(r.doc_id);
     if (!allSources.some((s) => s.doc_id === r.doc_id)) {
-      const source = { ...r, text: r.text.slice(0, 400) };
-      allSources.push(source);
-      newSources.push(source);
+      allSources.push({ ...r, text: r.text.slice(0, 400) });
     }
   }
-  if (newSources.length > 0) {
+  if (newResults.length > 0) {
     emit({ event: "sources", data: allSources });
   }
 
-  if (newResults.length === 0 || !fetchDoc) {
-    return { text: "No new results found for this query.", results: [], inputTokens: 0, outputTokens: 0 };
+  return newResults;
+}
+
+/**
+ * Phase 2: Summarize all collected documents in one batch.
+ * Called AFTER all searches complete. Each summary emitted to UI immediately.
+ */
+async function summarizeAllDocs(
+  client: OpenAI,
+  docs: SearchResult[],
+  emit: (event: SSEYield) => void,
+): Promise<{ inputTokens: number; outputTokens: number; count: number }> {
+  const fetchDoc = _fetchDocumentFn;
+  if (!fetchDoc || docs.length === 0) {
+    return { inputTokens: 0, outputTokens: 0, count: 0 };
   }
 
-  // Mark as summarized
-  for (const r of newResults) {
-    summarizedDocIds.add(r.doc_id);
-  }
+  emit({ event: "summarizing", data: { count: docs.length, focus: _lastUserQuery } });
 
-  emit({
-    event: "summarizing",
-    data: { count: newResults.length, focus: _lastUserQuery },
-  });
-
-  // 3. Fetch + summarize in batches of 5 (Workers limit: 6 simultaneous outgoing connections)
-  // Each summary is sent to UI immediately as it completes — progressive display
   const CONCURRENCY = 5;
-  const focus = _lastUserQuery; // Always use user's original question as primary focus
-  const summaryResults: SummaryResult[] = [];
-
-  for (let i = 0; i < newResults.length; i += CONCURRENCY) {
-    const batch = newResults.slice(i, i + CONCURRENCY);
-    const batchResults = await Promise.all(
-      batch.map(async (r) => {
-        const text = await fetchDoc(r.doc_id);
-        if (!text) return null;
-        const result = await summarizeDocument(client, r.doc_id, text, focus, _lastUserQuery);
-        // Send each summary immediately to UI
-        if (result) {
-          emit({ event: "summaries", data: [{ docId: result.docId, summary: result.summary }] });
-        }
-        return result;
-      }),
-    );
-    for (const result of batchResults) {
-      if (result) summaryResults.push(result);
-    }
-  }
-
-  // 5. Filter out NONE relevance, sort by court level + relevance + year, limit
-  const relevant = summaryResults
-    .filter((r) => r.relevance !== "NONE")
-    .sort((a, b) => {
-      const levelA = COURT_LEVEL_ORDER[a.courtLevel] ?? 4;
-      const levelB = COURT_LEVEL_ORDER[b.courtLevel] ?? 4;
-      if (levelA !== levelB) return levelA - levelB;
-      const relA = RELEVANCE_ORDER[a.relevance] ?? 3;
-      const relB = RELEVANCE_ORDER[b.relevance] ?? 3;
-      if (relA !== relB) return relA - relB;
-      return b.year - a.year;
-    })
-    .slice(0, MAX_RELEVANT_PER_SEARCH);
-
-  // Log
+  const focus = _lastUserQuery;
   let totalIn = 0;
   let totalOut = 0;
-  for (const r of summaryResults) {
-    totalIn += r.inputTokens;
-    totalOut += r.outputTokens;
+  let summarized = 0;
+
+  for (let i = 0; i < docs.length; i += CONCURRENCY) {
+    const batch = docs.slice(i, i + CONCURRENCY);
+    await Promise.all(
+      batch.map(async (r) => {
+        const text = await fetchDoc(r.doc_id);
+        if (!text) return;
+        const result = await summarizeDocument(client, r.doc_id, text, focus, _lastUserQuery);
+        if (result) {
+          totalIn += result.inputTokens;
+          totalOut += result.outputTokens;
+          summarized++;
+          // Send each summary to UI immediately
+          emit({ event: "summaries", data: [{ docId: result.docId, summary: result.summary }] });
+        }
+      }),
+    );
   }
 
   console.log(JSON.stringify({
-    event: "search_and_summarize",
+    event: "summarize_batch",
     sessionId: _sessionId,
-    query: query.slice(0, 200),
-    yearFrom,
-    yearTo,
-    searched: searchResults.length,
-    newDocs: newResults.length,
-    summarized: summaryResults.length,
-    relevant: relevant.length,
-    filteredOut: summaryResults.length - relevant.length,
+    totalDocs: docs.length,
+    summarized,
     inputTokens: totalIn,
     outputTokens: totalOut,
   }));
 
-  // 6. Format for LLM (sorted by court level + relevance + year)
-  const text = formatSummariesForLLM(relevant);
-
-  return { text, results: summaryResults, inputTokens: totalIn, outputTokens: totalOut };
+  return { inputTokens: totalIn, outputTokens: totalOut, count: summarized };
 }
 
 // ── Main Chat Stream ───────────────────────────────────
@@ -585,20 +535,18 @@ async function streamOpenAI(
 ) {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  // Phase 1: Search — tool-calling loop with brief tool results
+  // Phase 1: Search — LLM calls search_cases, we only do Vectorize (fast)
   const apiMessages: OpenAI.ChatCompletionMessageParam[] = [
     { role: "system", content: system },
     ...messages,
   ];
 
   const allSources: SearchResult[] = [];
-  const summarizedDocIds = new Set<string>();
+  const seenDocIds = new Set<string>();
+  const allFoundDocs: SearchResult[] = []; // all unique docs across all searches
   let searchStep = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
-  let summarizerInputTokens = 0;
-  let summarizerOutputTokens = 0;
-  let documentsAnalyzed = 0;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const response = await client.chat.completions.create({
@@ -636,49 +584,48 @@ async function streamOpenAI(
             },
           });
 
-          const result = await handleSearchAndSummarize(
-            client,
+          // Phase 1: search only — no summarization
+          const newDocs = await handleSearch(
             args.query ?? "",
-            args.legal_context,
             args.court_level,
             args.year_from,
             args.year_to,
             searchFn,
-            summarizedDocIds,
+            seenDocIds,
             allSources,
             emit,
           );
+          allFoundDocs.push(...newDocs);
 
-          summarizerInputTokens += result.inputTokens;
-          summarizerOutputTokens += result.outputTokens;
-          documentsAnalyzed += result.results.length;
-
-          // Brief acknowledgment for the tool-calling LLM
-          const relevant = result.results.filter((r) => r.relevance !== "NONE");
+          // Tool result: list of found docs so LLM can decide if more searches needed
+          const docList = newDocs.slice(0, 5).map((r) => `${r.title} (${r.court}, ${r.year})`).join("; ");
           apiMessages.push({
             role: "tool",
             tool_call_id: toolCall.id,
-            content: relevant.length > 0
-              ? `Βρέθηκαν ${relevant.length} σχετικές αποφάσεις (από ${result.results.length} που αναλύθηκαν).`
-              : `Δεν βρέθηκαν σχετικές αποφάσεις. Δοκιμάστε διαφορετικούς όρους αναζήτησης.`,
+            content: newDocs.length > 0
+              ? `Βρέθηκαν ${newDocs.length} νέα έγγραφα: ${docList}${newDocs.length > 5 ? "..." : ""}`
+              : `Δεν βρέθηκαν νέα έγγραφα. Δοκιμάστε διαφορετικούς όρους.`,
           });
         }
       }
       continue;
     }
 
-    // No more tool calls — proceed to answer
+    // No more tool calls
     break;
   }
 
-  // Emit sources for the UI to display — no separate answer LLM call needed
+  // Phase 2: Summarize all found docs in one batch
+  const summarizerResult = await summarizeAllDocs(client, allFoundDocs, emit);
+
+  // Final sources emit
   if (allSources.length > 0) {
     emit({ event: "sources", data: allSources });
   }
 
   const mainCost = calculateCost(modelCfg, totalInputTokens, totalOutputTokens);
-  const summarizerCost = (summarizerInputTokens / 1_000_000) * 2.5 +
-                         (summarizerOutputTokens / 1_000_000) * 10;
+  const summarizerCost = (summarizerResult.inputTokens / 1_000_000) * 2.5 +
+                         (summarizerResult.outputTokens / 1_000_000) * 10;
   const totalCost = mainCost + summarizerCost;
 
   console.log(JSON.stringify({
@@ -689,9 +636,9 @@ async function streamOpenAI(
     mainInputTokens: totalInputTokens,
     mainOutputTokens: totalOutputTokens,
     mainCostUsd: parseFloat(mainCost.toFixed(4)),
-    summarizerDocsAnalyzed: documentsAnalyzed,
-    summarizerInputTokens,
-    summarizerOutputTokens,
+    summarizerDocsAnalyzed: summarizerResult.count,
+    summarizerInputTokens: summarizerResult.inputTokens,
+    summarizerOutputTokens: summarizerResult.outputTokens,
     summarizerCostUsd: parseFloat(summarizerCost.toFixed(4)),
     totalCostUsd: parseFloat(totalCost.toFixed(4)),
     searchSteps: searchStep,
@@ -702,11 +649,11 @@ async function streamOpenAI(
     event: "usage",
     data: {
       model: modelCfg.label,
-      inputTokens: totalInputTokens + summarizerInputTokens,
-      outputTokens: totalOutputTokens + summarizerOutputTokens,
-      totalTokens: totalInputTokens + totalOutputTokens + summarizerInputTokens + summarizerOutputTokens,
+      inputTokens: totalInputTokens + summarizerResult.inputTokens,
+      outputTokens: totalOutputTokens + summarizerResult.outputTokens,
+      totalTokens: totalInputTokens + totalOutputTokens + summarizerResult.inputTokens + summarizerResult.outputTokens,
       costUsd: totalCost,
-      documentsAnalyzed,
+      documentsAnalyzed: summarizerResult.count,
     } as UsageData,
   });
   emit({ event: "done", data: {} });
@@ -724,20 +671,18 @@ async function streamClaude(
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-  // Phase 1: Search — tool-calling loop with brief tool results
+  // Phase 1: Search — LLM calls search_cases, we only do Vectorize (fast)
   const apiMessages: Anthropic.MessageParam[] = messages.map((m) => ({
     role: m.role as "user" | "assistant",
     content: m.content,
   }));
 
   const allSources: SearchResult[] = [];
-  const summarizedDocIds = new Set<string>();
+  const seenDocIds = new Set<string>();
+  const allFoundDocs: SearchResult[] = [];
   let searchStep = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
-  let summarizerInputTokens = 0;
-  let summarizerOutputTokens = 0;
-  let documentsAnalyzed = 0;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const response = await client.messages.create({
@@ -777,30 +722,26 @@ async function streamClaude(
             },
           });
 
-          const result = await handleSearchAndSummarize(
-            openaiClient,
+          // Phase 1: search only — no summarization
+          const newDocs = await handleSearch(
             (args.query as string) ?? "",
-            args.legal_context as string | undefined,
             args.court_level as string | undefined,
             args.year_from as number | undefined,
             args.year_to as number | undefined,
             searchFn,
-            summarizedDocIds,
+            seenDocIds,
             allSources,
             emit,
           );
+          allFoundDocs.push(...newDocs);
 
-          summarizerInputTokens += result.inputTokens;
-          summarizerOutputTokens += result.outputTokens;
-          documentsAnalyzed += result.results.length;
-
-          const relevant = result.results.filter((r) => r.relevance !== "NONE");
+          const docList = newDocs.slice(0, 5).map((r) => `${r.title} (${r.court}, ${r.year})`).join("; ");
           toolResults.push({
             type: "tool_result",
             tool_use_id: toolUse.id,
-            content: relevant.length > 0
-              ? `Βρέθηκαν ${relevant.length} σχετικές αποφάσεις (από ${result.results.length} που αναλύθηκαν).`
-              : `Δεν βρέθηκαν σχετικές αποφάσεις.`,
+            content: newDocs.length > 0
+              ? `Βρέθηκαν ${newDocs.length} νέα έγγραφα: ${docList}${newDocs.length > 5 ? "..." : ""}`
+              : `Δεν βρέθηκαν νέα έγγραφα.`,
           });
         }
       }
@@ -809,16 +750,18 @@ async function streamClaude(
       continue;
     }
 
-    // No more tool calls — proceed to answer
     break;
   }
 
-  // Emit sources for the UI to display — no separate answer LLM call needed
+  // Phase 2: Summarize all found docs in one batch
+  const summarizerResult = await summarizeAllDocs(openaiClient, allFoundDocs, emit);
+
+  // Final sources emit
   if (allSources.length > 0) emit({ event: "sources", data: allSources });
 
   const mainCost = calculateCost(modelCfg, totalInputTokens, totalOutputTokens);
-  const summarizerCost = (summarizerInputTokens / 1_000_000) * 2.5 +
-                         (summarizerOutputTokens / 1_000_000) * 10;
+  const summarizerCost = (summarizerResult.inputTokens / 1_000_000) * 2.5 +
+                         (summarizerResult.outputTokens / 1_000_000) * 10;
   const totalCost = mainCost + summarizerCost;
 
   console.log(JSON.stringify({
@@ -829,9 +772,9 @@ async function streamClaude(
     mainInputTokens: totalInputTokens,
     mainOutputTokens: totalOutputTokens,
     mainCostUsd: parseFloat(mainCost.toFixed(4)),
-    summarizerDocsAnalyzed: documentsAnalyzed,
-    summarizerInputTokens,
-    summarizerOutputTokens,
+    summarizerDocsAnalyzed: summarizerResult.count,
+    summarizerInputTokens: summarizerResult.inputTokens,
+    summarizerOutputTokens: summarizerResult.outputTokens,
     summarizerCostUsd: parseFloat(summarizerCost.toFixed(4)),
     totalCostUsd: parseFloat(totalCost.toFixed(4)),
     searchSteps: searchStep,
@@ -842,11 +785,11 @@ async function streamClaude(
     event: "usage",
     data: {
       model: modelCfg.label,
-      inputTokens: totalInputTokens + summarizerInputTokens,
-      outputTokens: totalOutputTokens + summarizerOutputTokens,
-      totalTokens: totalInputTokens + totalOutputTokens + summarizerInputTokens + summarizerOutputTokens,
+      inputTokens: totalInputTokens + summarizerResult.inputTokens,
+      outputTokens: totalOutputTokens + summarizerResult.outputTokens,
+      totalTokens: totalInputTokens + totalOutputTokens + summarizerResult.inputTokens + summarizerResult.outputTokens,
       costUsd: totalCost,
-      documentsAnalyzed,
+      documentsAnalyzed: summarizerResult.count,
     } as UsageData,
   });
   emit({ event: "done", data: {} });

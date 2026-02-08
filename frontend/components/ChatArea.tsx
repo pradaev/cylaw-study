@@ -244,7 +244,10 @@ export function ChatArea() {
                   break;
                 }
                 case "done": {
-                  // Don't set isStreaming here — handled after history message is created
+                  setAssistant((prev) => ({
+                    ...prev,
+                    isStreaming: false,
+                  }));
                   break;
                 }
                 case "error": {
