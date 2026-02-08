@@ -87,6 +87,74 @@ User -> Next.js (Cloudflare Worker) -> API Routes
 11. Cross-reference graph analysis
 12. Query analytics dashboard
 
+### Post-Launch: Chunking & Retrieval Quality Improvements
+
+> Do these AFTER the project is fully launched and working in production.
+> All changes require re-embedding (~2.27M chunks, ~$15 via Batch API, ~2 hours).
+> Do ALL improvements in one batch, then re-ingest.
+
+**Problem analysis** (2026-02-07 session research):
+
+Current chunking (`rag/chunker.py`) uses `RecursiveCharacterTextSplitter` with 2000 char chunks, 400 overlap.
+Recursive chunking is the correct baseline — 2025 research (ACL/NAACL) confirms semantic chunking
+does NOT justify its computational cost over recursive in most cases. However, there are domain-specific
+issues with how we apply it to Cypriot court cases.
+
+**Improvement 1 — Strip references section before chunking** (High impact, Low effort)
+
+Every document starts with ΑΝΑΦΟΡΕΣ (cross-references) — dozens of Markdown links to other cases.
+These links get embedded into the first 1-3 chunks and create noise: a query for "lease termination"
+may match a chunk that merely LINKS to 20 cases but contains no substantive text.
+
+Fix: in `chunk_document()`, find the marker `ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ` and strip everything before it.
+Store cross-references in metadata only (already extracted via `_extract_cross_refs()`).
+
+**Improvement 2 — Contextual header prepend** (Very high impact, Medium effort)
+
+Based on Anthropic's Contextual Retrieval research (Sept 2024): prepending document context
+to each chunk before embedding reduces retrieval failures by 49% (67% with reranking).
+
+Current problem: a chunk like "Ο εφεσίβλητος παρουσιάστηκε ενώπιον του Δικαστηρίου..."
+(the respondent appeared before the court...) has no context about WHICH case, court, or issue.
+The embedding captures the semantic meaning of the TEXT but not the DOCUMENT it belongs to.
+
+Fix: before embedding, prepend a structured header to each chunk's text:
+
+```
+[Суд: Εφετείο Κύπρου | Дело: Ποιν. Έφεση 15/2026 | Стороны: ΓΕΝ. ΕΙΣΑΓΓΕΛΕΑΣ v. ΝΕΣΤΟΡΟΣ | 2026]
+[текст чанка]
+```
+
+This header is included in the embedding but NOT stored in the chunk text for display.
+The embedding model sees the context; the user sees clean text.
+
+**Improvement 3 — Merge small tail chunks** (Low impact, Low effort)
+
+1% of chunks are under 500 chars — tiny fragments at document ends. These are noise.
+
+Fix: if last chunk is < 500 chars, merge it with the previous chunk.
+
+**Improvement 4 — Structure-aware splitting** (Medium impact, High effort)
+
+Court cases have clear structural sections: header, facts, legal analysis, ruling (ΑΠΟΦΑΣΗ).
+Current chunker is unaware of this. It may split a legal argument mid-sentence.
+
+Fix: detect section headers (bold markers, ΑΠΟΦΑΣΗ, etc.) and use them as primary split points.
+This is complex and should be evaluated after improvements 1-3 are live.
+
+**Research sources:**
+- "Is Semantic Chunking Worth the Computational Cost?" (NAACL 2025) — semantic ≈ recursive in most cases
+- Anthropic Contextual Retrieval (Sept 2024) — 49-67% retrieval error reduction with context prepend
+- Summary-Augmented Chunking (SAC, NAACL 2025) — global context reduces Document-Level Retrieval Mismatch
+- Late Chunking (ICLR 2025) — embed full doc first, chunk after — requires long-context embedding model
+
+**Execution plan:**
+1. Implement improvements 1-3 in `rag/chunker.py`
+2. Run `batch_ingest.py reset` to clear old batch data
+3. Run `batch_ingest.py run` to re-chunk, re-embed, re-upload (~$15, ~2 hours)
+4. Verify retrieval quality on test queries
+5. If satisfied, evaluate improvement 4
+
 ## Gotchas for Future Agents
 
 - **Vectorize index is PRODUCTION** — `cylaw-search` contains ~2.27M vectors. Do NOT delete. See warning above.

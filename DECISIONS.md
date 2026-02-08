@@ -11,3 +11,4 @@
 | 2026-02-07 | Document storage | Cloudflare R2 (`cyprus-case-law-docs`) | Zero egress costs, native Worker binding, 149,886 .md files. Dev uses S3 HTTP API (real bucket), prod uses Worker binding. |
 | 2026-02-07 | Frontend framework | Next.js 16 on Cloudflare Workers via @opennextjs/cloudflare | Server-side rendering, API routes co-located with frontend, native Cloudflare bindings (R2, Vectorize). |
 | 2026-02-07 | Auth | Cloudflare Zero Trust (email OTP) | No custom auth code needed. Replaced password-based auth. |
+| 2026-02-07 | Chunking method | RecursiveCharacterTextSplitter (2000 chars, 400 overlap) | ACL/NAACL 2025 research confirms semantic chunking does NOT justify computational cost over recursive for most cases. Current params: ~500 tokens/chunk, 20% overlap. Post-launch improvements planned: strip ΑΝΑΦΟΡΕΣ section, prepend contextual header (Anthropic technique, -49% retrieval errors), merge tail chunks. See PROJECT_STATUS.md "Post-Launch" section. |
