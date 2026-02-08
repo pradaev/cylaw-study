@@ -17,6 +17,7 @@ Environment:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import multiprocessing
@@ -53,12 +54,30 @@ INPUT_DIR = PROJECT_ROOT / "data" / "cases_parsed"
 PROGRESS_FILE = PROJECT_ROOT / "data" / "vectorize_progress.json"
 
 # Tuning knobs
-EMBED_BATCH = 200       # texts per OpenAI call (max 300K tokens/request)
-EMBED_THREADS = 10      # parallel OpenAI calls (429s handled by retry)
-UPLOAD_BATCH = 4000     # vectors per Vectorize call (max 5000)
-UPLOAD_THREADS = 5      # parallel Vectorize uploads
+EMBED_BATCH = 150       # texts per OpenAI call (max 300K tokens; avg ~1300 tok/chunk → ~195K/call)
+EMBED_THREADS = 3       # parallel OpenAI calls — fewer = smoother pacing under TPM limit
+UPLOAD_BATCH = 5000     # vectors per Vectorize call (max 5000)
+UPLOAD_THREADS = 3      # parallel Vectorize uploads
 MAX_RETRIES = 5
-QUEUE_MAXSIZE = 50      # backpressure: max pending upload batches
+QUEUE_MAXSIZE = 20      # backpressure: max pending upload batches
+
+# Vectorize ID limit
+MAX_VECTOR_ID_BYTES = 64
+
+
+# ── Vector ID ───────────────────────────────────────────────────────
+
+def make_vector_id(doc_id: str, chunk_index: int) -> str:
+    """Create a Vectorize-safe vector ID (max 64 bytes).
+
+    Uses readable format when it fits, MD5 hash prefix otherwise.
+    doc_id is always available in metadata for lookups.
+    """
+    readable = f"{doc_id}::{chunk_index}"
+    if len(readable.encode("utf-8")) <= MAX_VECTOR_ID_BYTES:
+        return readable
+    short = hashlib.md5(doc_id.encode("utf-8")).hexdigest()[:16]
+    return f"{short}::{chunk_index}"
 
 
 # ── Cloudflare Vectorize ────────────────────────────────────────────
@@ -116,10 +135,45 @@ def upload_batch(vectors: list[dict], session: requests.Session) -> int:
     return 0
 
 
+# ── Rate Limiter ────────────────────────────────────────────────────
+
+class TokenBucket:
+    """Thread-safe token bucket rate limiter for OpenAI TPM."""
+
+    def __init__(self, tokens_per_minute: int):
+        self._rate = tokens_per_minute / 60.0  # tokens per second
+        # Limit burst to ~2 batches worth — prevents overwhelming the API
+        self._capacity = min(float(tokens_per_minute), 400_000.0)
+        self._tokens = 0.0  # start empty — ramp up to avoid 429 from depleted budgets
+        self._last = time.monotonic()
+        self._lock = threading.Lock()
+
+    def acquire(self, tokens: int) -> None:
+        """Block until `tokens` budget is available."""
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                elapsed = now - self._last
+                self._tokens = min(self._capacity, self._tokens + elapsed * self._rate)
+                self._last = now
+                if self._tokens >= tokens:
+                    self._tokens -= tokens
+                    return
+                wait = (tokens - self._tokens) / self._rate
+            time.sleep(min(wait, 2.0))
+
+
 # ── OpenAI Embeddings ───────────────────────────────────────────────
 
-def embed_batch(client: OpenAI, texts: list[str]) -> list[list[float]]:
-    """Embed texts with retry on 429 and other errors."""
+# Estimated tokens per chunk (~1274 avg measured). Used for rate-limit pacing.
+EST_TOKENS_PER_CHUNK = 1300
+
+def embed_batch(client: OpenAI, texts: list[str], rate_limiter: TokenBucket) -> list[list[float]]:
+    """Embed texts with rate limiting, retry, and auto-split on token overflow."""
+    # If batch exceeds token limit, split in half recursively
+    est_tokens = len(texts) * EST_TOKENS_PER_CHUNK
+    rate_limiter.acquire(est_tokens)
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = client.embeddings.with_raw_response.create(
@@ -130,27 +184,22 @@ def embed_batch(client: OpenAI, texts: list[str]) -> list[list[float]]:
 
         except Exception as exc:
             err_str = str(exc)
-            if "429" in err_str or "rate" in err_str.lower():
-                wait = min(2 ** attempt * 3, 60)
+            # Token limit exceeded → split batch in half
+            if "max" in err_str and "tokens" in err_str and len(texts) > 1:
+                mid = len(texts) // 2
+                logger.info("Batch too large (%d texts), splitting", len(texts))
+                left = embed_batch(client, texts[:mid], rate_limiter)
+                right = embed_batch(client, texts[mid:], rate_limiter)
+                return left + right
+            elif "429" in err_str or "rate" in err_str.lower():
+                wait = min(2 ** attempt * 2, 20)
                 time.sleep(wait)
             else:
-                wait = min(2 ** attempt, 15)
+                wait = min(2 ** attempt, 10)
                 logger.warning("OpenAI err (att %d): %s", attempt, err_str[:100])
                 time.sleep(wait)
 
     raise RuntimeError("OpenAI embed failed after retries")
-
-
-def _parse_reset(value: str) -> float:
-    import re
-    total = 0.0
-    m = re.search(r"([\d.]+)m", value)
-    if m:
-        total += float(m.group(1)) * 60
-    m = re.search(r"([\d.]+)s", value)
-    if m:
-        total += float(m.group(1))
-    return total
 
 
 # ── Progress ────────────────────────────────────────────────────────
@@ -184,8 +233,9 @@ def _chunk_file(args: tuple) -> list[dict]:
 
 # ── Pipeline ────────────────────────────────────────────────────────
 
-def run_ingest(court: str = None, limit: int = None) -> None:
+def run_ingest(court: str = None, limit: int = None, tpm: int = 4_500_000) -> None:
     openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    rate_limiter = TokenBucket(tpm)  # slightly under limit for safety
 
     # Collect files
     md_files = sorted(INPUT_DIR.rglob("*.md"))
@@ -207,6 +257,7 @@ def run_ingest(court: str = None, limit: int = None) -> None:
     print(f"Cloudflare Vectorize Direct Ingest (parallel)")
     print(f"  OpenAI:        {OPENAI_MODEL} ({OPENAI_DIMS}d)")
     print(f"  Vectorize:     {VECTORIZE_INDEX}")
+    print(f"  Rate limit:    {tpm:,} TPM")
     print(f"  Embed:         {EMBED_THREADS} threads × {EMBED_BATCH}/batch")
     print(f"  Upload:        {UPLOAD_THREADS} threads × {UPLOAD_BATCH}/batch")
     print(f"  Docs total:    {total_docs:,}")
@@ -294,7 +345,7 @@ def run_ingest(court: str = None, limit: int = None) -> None:
     def embed_and_enqueue(batch_chunks: list[dict]) -> int:
         texts = [c["text"] for c in batch_chunks]
         try:
-            embeddings = embed_batch(openai_client, texts)
+            embeddings = embed_batch(openai_client, texts, rate_limiter)
         except RuntimeError:
             return 0
 
@@ -303,7 +354,7 @@ def run_ingest(court: str = None, limit: int = None) -> None:
         local_docs = set()
         for j, cd in enumerate(batch_chunks):
             vectors.append({
-                "id": f"{cd['doc_id']}::{cd['chunk_index']}",
+                "id": make_vector_id(cd["doc_id"], cd["chunk_index"]),
                 "values": embeddings[j],
                 "metadata": {
                     "doc_id": cd["doc_id"],
@@ -390,6 +441,7 @@ def main():
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--court", type=str, default=None)
+    parser.add_argument("--tpm", type=int, default=4_500_000, help="OpenAI TPM rate limit (default: 4.5M)")
     parser.add_argument("--stats", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
@@ -404,7 +456,7 @@ def main():
         print_stats()
         return
 
-    run_ingest(court=args.court, limit=args.limit)
+    run_ingest(court=args.court, limit=args.limit, tpm=args.tpm)
 
 
 if __name__ == "__main__":

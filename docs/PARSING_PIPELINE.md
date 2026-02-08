@@ -387,18 +387,66 @@ Note: Word counts for newly added courts (areiospagos, apofaseised, jsc, rscc, a
 
 Convert Markdown documents into vector embeddings for semantic search.
 
-### Dual Embedding Support (`rag/config.py`)
+### Production: Cloudflare Vectorize (`cylaw-search`)
 
-Two independent backends, each with its own ChromaDB:
+> **WARNING**: The `cylaw-search` index is PRODUCTION. Do NOT delete or recreate it.
+
+| Property | Value |
+|----------|-------|
+| Index name | `cylaw-search` |
+| Embedding model | OpenAI `text-embedding-3-small` |
+| Dimensions | 1536 |
+| Metric | cosine |
+| Total vectors | ~2,269,231 |
+| Courts indexed | All 15 |
+| Ingestion method | OpenAI Batch API (`scripts/batch_ingest.py`) |
+| Cost | ~$15 (Batch API = 50% off standard pricing) |
+
+### Ingestion via OpenAI Batch API (`scripts/batch_ingest.py`)
+
+The production pipeline uses the OpenAI Batch API for embeddings — 50% cheaper than synchronous API, with separate (higher) rate limits and no TPM throttling.
+
+**Pipeline steps:**
+1. **Prepare** — chunk all documents, save metadata index (`chunks_meta.jsonl`), create batch JSONL files (50,000 inputs per batch, 100 inputs per request line)
+2. **Submit** — upload batch files to OpenAI Files API, create batch jobs (`/v1/embeddings` endpoint)
+3. **Status** — poll OpenAI for batch job completion
+4. **Collect** — download embedding results, parse into vectors, upload to Cloudflare Vectorize (parallel: 2 download threads + 6 upload threads)
+
+```bash
+# Full pipeline
+python scripts/batch_ingest.py run
+
+# Step by step
+python scripts/batch_ingest.py prepare          # chunk docs → JSONL batches
+python scripts/batch_ingest.py submit           # upload to OpenAI Batch API
+python scripts/batch_ingest.py status           # check progress
+python scripts/batch_ingest.py collect           # download + upload to Vectorize
+
+# Options
+python scripts/batch_ingest.py prepare --limit 1000   # test subset
+python scripts/batch_ingest.py prepare --court aad     # one court
+python scripts/batch_ingest.py reset                   # clear batch data
+```
+
+State is saved to `data/batch_embed/state.json` — the pipeline is fully resumable.
+
+### Legacy: ChromaDB (local dev only)
+
+Two independent ChromaDB backends exist for local development:
 
 | | Local | OpenAI |
 |---|---|---|
 | Model | `paraphrase-multilingual-mpnet-base-v2` | `text-embedding-3-small` |
 | Dimensions | 768 | 1536 |
-| Max tokens | 128 | 8192 |
-| Cost | Free | $0.02 / 1M tokens |
-| Speed | ~250 ch/s (CPU) | ~300 ch/s (API, Tier 3) |
 | DB path | `data/chromadb_local/` | `data/chromadb_openai/` |
+| Courts indexed | Original 9 only | Original 9 only |
+| Status | **Legacy** — use Vectorize for production | **Legacy** |
+
+```bash
+# Legacy: index into ChromaDB (not recommended for new work)
+python -m rag.ingest --provider local
+python -m rag.ingest --provider openai
+```
 
 ### Chunking (`rag/chunker.py`)
 
@@ -409,25 +457,13 @@ Each Markdown file is split into overlapping chunks:
 
 Each chunk carries metadata: `doc_id`, `title`, `court`, `year`, `chunk_index`, `cross_refs`.
 
-Total: **~2,269,231 chunks** from 149,886 documents (local model). Only the original 9 courts have been indexed so far; the 6 new courts need re-indexing.
+Total: **~2,269,231 chunks** from 149,886 documents across all 15 courts.
 
-### Running
+### Vector ID Format
 
-```bash
-# Index with local model (free, ~50 min)
-python -m rag.ingest --provider local
-
-# Index with OpenAI (paid, ~1 hour at Tier 3)
-python -m rag.ingest --provider openai
-
-# Both can run in parallel (separate databases)
-
-# Test with limited docs
-python -m rag.ingest --provider local --limit 100
-
-# Check status
-python -m rag.ingest --stats
-```
+Vectorize has a 64-byte limit on vector IDs. The `make_vector_id()` helper (used in all ingestion scripts) generates IDs as:
+- `{doc_id}::{chunk_index}` if ≤64 bytes
+- `{md5(doc_id)[:16]}::{chunk_index}` if >64 bytes (MD5 hash fallback)
 
 ---
 
@@ -439,7 +475,7 @@ python -m rag.ingest --stats
 pip install -r requirements.txt
 ```
 
-Key packages: `requests`, `beautifulsoup4`, `pdfplumber`, `chromadb`, `openai`, `anthropic`, `fastapi`, `sentence-transformers`, `langchain-text-splitters`
+Key packages: `requests`, `beautifulsoup4`, `pdfplumber`, `chromadb`, `openai`, `anthropic`, `fastapi`, `sentence-transformers`, `langchain-text-splitters`, `tqdm`, `python-dotenv`
 
 ### Environment Variables (`.env`)
 
@@ -463,13 +499,14 @@ python -m scraper.downloader
 # 3. Convert to Markdown (~2 min)
 python -m scraper.extract_text
 
-# 4. Build vector index (~50 min local, ~1 hour OpenAI)
-python -m rag.ingest --provider local
-python -m rag.ingest --provider openai  # optional, parallel
+# 4. Upload to R2 (~30 min)
+python -m rag.upload_to_r2
 
-# 5. Start search server + frontend
-python -m rag.search_server --provider local  # terminal 1
-cd frontend && npm run dev                     # terminal 2
+# 5. Build Vectorize index via Batch API (~2 hours, ~$15)
+python scripts/batch_ingest.py run
+
+# 6. Start frontend
+cd frontend && npm run dev
 ```
 
 ---
@@ -495,9 +532,12 @@ The corpus contains **746,552 cross-references** between cases. These are preser
 | Courts covered | 15 | All courts on cylaw.org |
 | Downloaded case files | 149,886 | ~8 GB |
 | Parsed Markdown files | 149,886 | ~5.5 GB |
+| R2 documents | 149,886 | ~5.5 GB |
 | Total words | ~300M+ | |
-| Vector chunks (ChromaDB local) | ~2,269,231 | ~38 GB |
+| Vector chunks (Vectorize) | ~2,269,231 | PRODUCTION |
+| Vector chunks (ChromaDB, legacy) | ~2,269,231 | ~38 GB (local) |
 | Cross-references | 746,552+ | |
+| Embedding model | text-embedding-3-small | 1536 dims |
 
 ---
 

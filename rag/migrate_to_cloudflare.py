@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -20,6 +21,17 @@ from pathlib import Path
 import requests as http_requests
 from dotenv import load_dotenv
 from tqdm import tqdm
+
+MAX_VECTOR_ID_BYTES = 64
+
+
+def make_vector_id(doc_id: str, chunk_index: int) -> str:
+    """Create a Vectorize-safe vector ID (max 64 bytes)."""
+    readable = f"{doc_id}::{chunk_index}"
+    if len(readable.encode("utf-8")) <= MAX_VECTOR_ID_BYTES:
+        return readable
+    short = hashlib.md5(doc_id.encode("utf-8")).hexdigest()[:16]
+    return f"{short}::{chunk_index}"
 
 load_dotenv()
 
@@ -129,8 +141,10 @@ def migrate(limit: int = None) -> None:
             if results["documents"] and results["documents"][i]:
                 metadata["text"] = results["documents"][i][:4000]  # stay under 10 KiB
 
+            doc_id = metadata.get("doc_id", vec_id.split("::")[0])
+            chunk_idx = metadata.get("chunk_index", 0)
             cf_vectors.append({
-                "id": vec_id,
+                "id": make_vector_id(doc_id, chunk_idx),
                 "values": results["embeddings"][i],
                 "metadata": metadata,
             })

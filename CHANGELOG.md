@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-02-07 (late evening — Vectorize ingestion)
+
+### Added
+- **`scripts/batch_ingest.py`** — OpenAI Batch API pipeline for embedding all 149,886 documents into Cloudflare Vectorize. 3-step pipeline: prepare (chunk → JSONL), submit (Batch API), collect (download embeddings → upload to Vectorize). 50% cheaper than synchronous API, separate rate limits, no TPM throttling.
+- **Parallel collect** — `step_collect` uses `concurrent.futures.ThreadPoolExecutor` with 2 download workers and 6 upload workers for ~6x speedup over sequential processing.
+- **`make_vector_id()` helper** — generates Vectorize-safe vector IDs (max 64 bytes) using MD5 hashing for long doc_ids. Applied across all ingestion scripts.
+- **Token bucket rate limiter** in `ingest_to_vectorize.py` — client-side rate limiting for OpenAI API with configurable TPM.
+
+### Changed
+- **Vectorize index `cylaw-search`** marked as PRODUCTION — ~2.27M vectors from all 15 courts, OpenAI `text-embedding-3-small` (1536 dims, cosine)
+- `ingest_to_vectorize.py` — optimized batch sizes, added automatic batch splitting on token overflow, improved error handling
+- All documentation updated to reflect Vectorize as production vector database (not "Phase 2")
+
+### Fixed
+- Vector ID length errors (>64 bytes) — `make_vector_id()` with MD5 fallback applied to `batch_ingest.py`, `ingest_to_vectorize.py`, `export_to_vectorize.py`, `migrate_to_cloudflare.py`
+- Python 3.9 compatibility in `batch_ingest.py` — `str | None` → `Optional[str]`
+
 ## 2026-02-07 (evening)
 
 ### Added — Summarizer accuracy & relevance system

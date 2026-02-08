@@ -16,6 +16,7 @@ Environment:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -26,6 +27,17 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 from tqdm import tqdm
+
+MAX_VECTOR_ID_BYTES = 64
+
+
+def make_vector_id(doc_id: str, chunk_index: int) -> str:
+    """Create a Vectorize-safe vector ID (max 64 bytes)."""
+    readable = f"{doc_id}::{chunk_index}"
+    if len(readable.encode("utf-8")) <= MAX_VECTOR_ID_BYTES:
+        return readable
+    short = hashlib.md5(doc_id.encode("utf-8")).hexdigest()[:16]
+    return f"{short}::{chunk_index}"
 
 load_dotenv()
 
@@ -251,15 +263,17 @@ def main():
             vals = embeddings[i]
             if hasattr(vals, "tolist"):
                 vals = vals.tolist()
+            doc_id = meta.get("doc_id", "")
+            chunk_idx = meta.get("chunk_index", 0)
             vectors.append({
-                "id": vec_id,
+                "id": make_vector_id(doc_id, chunk_idx),
                 "values": vals,
                 "metadata": {
-                    "doc_id": meta.get("doc_id", ""),
+                    "doc_id": doc_id,
                     "court": meta.get("court", ""),
                     "year": meta.get("year", ""),
                     "title": meta.get("title", "")[:200],
-                    "chunk_index": meta.get("chunk_index", 0),
+                    "chunk_index": chunk_idx,
                 },
             })
 

@@ -35,8 +35,8 @@ todos:
     content: Deploy Phase 1 to Cloudflare Workers (doc viewer + chat + summarizer via R2)
     status: done  # deployed to https://cyprus-case-law.cylaw-study.workers.dev
   - id: vectorize-migrate
-    content: "PHASE 2: When vectorization completes — run migrate_to_cloudflare.py, add Vectorize binding"
-    status: pending
+    content: "PHASE 2: Populate Vectorize with all 15 courts via OpenAI Batch API (batch_ingest.py)"
+    status: done  # ~2.27M vectors in cylaw-search index, all 15 courts
   - id: retriever-ts
     content: "PHASE 2: Write lib/retriever.ts (Vectorize query), wire up chat API route"
     status: pending
@@ -302,17 +302,11 @@ Set env vars in Cloudflare Pages dashboard: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY
 
 ## Phase 2: Vectorize integration (when vectorization completes)
 
-### Step 10. Migrate vectors to Cloudflare Vectorize
+### Step 10. ~~Migrate vectors to Cloudflare Vectorize~~ DONE
 
-When OpenAI vectorization finishes:
-
-```bash
-# Create Vectorize index (if not created yet)
-npx wrangler vectorize create cylaw-cases --dimensions 1536 --metric cosine
-
-# Run existing migration script
-python -m rag.migrate_to_cloudflare
-```
+> **Completed 2026-02-07** — Used OpenAI Batch API (`scripts/batch_ingest.py`) instead of `migrate_to_cloudflare.py`.
+> Index `cylaw-search` contains ~2.27M vectors from all 15 courts.
+> Embedding model: `text-embedding-3-small` (1536 dims, cosine).
 
 Add Vectorize binding to `wrangler.jsonc`:
 
@@ -321,7 +315,7 @@ Add Vectorize binding to `wrangler.jsonc`:
   "vectorize": [
     {
       "binding": "VECTORIZE",
-      "index_name": "cylaw-cases"
+      "index_name": "cylaw-search"
     }
   ]
 }
