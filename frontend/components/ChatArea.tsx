@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { DocViewer } from "./DocViewer";
 import type { ChatMessage, SearchResult, UsageData, ActivityEntry, SummaryEntry } from "@/lib/types";
@@ -61,6 +61,9 @@ export function ChatArea() {
   // Stores summarizer output per doc_id — survives across messages
   const [summaryCache, setSummaryCache] = useState<Record<string, string>>({});
 
+  // Stable session ID for logging — persists across messages within a page session
+  const sessionId = useMemo(() => crypto.randomUUID(), []);
+
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -118,7 +121,7 @@ export function ChatArea() {
         const response = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: apiMessages, model, translate }),
+          body: JSON.stringify({ messages: apiMessages, model, translate, sessionId }),
         });
 
         // Update: request sent, model is thinking
@@ -385,6 +388,7 @@ export function ChatArea() {
             role={msg.role}
             content={msg.content}
             sources={msg.sources}
+            summaryCache={summaryCache}
             activityLog={msg.activityLog}
             usage={msg.usage}
             onSourceClick={setDocViewerId}
@@ -396,6 +400,7 @@ export function ChatArea() {
             role="assistant"
             content={assistant.content}
             sources={assistant.sources}
+            summaryCache={summaryCache}
             activityLog={assistant.activityLog}
             isStreaming={assistant.isStreaming}
             usage={assistant.usage}

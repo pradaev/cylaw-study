@@ -8,9 +8,11 @@
  * Flow:
  *   1. Embed the query text via OpenAI API (text-embedding-3-small, 1536 dims)
  *   2. Query Vectorize with topK=100, returnMetadata="none" (bypasses topK=20 limit)
- *   3. Group matching chunks by doc prefix, take top 30 unique documents
- *   4. Fetch metadata via getByIds() for representative vectors
- *   5. Return SearchResult[] with metadata (no full text)
+ *   3. Group matching chunks by doc prefix → unique documents
+ *   4. Fetch metadata via getByIds() for ALL unique docs
+ *   5. Apply year filtering if yearFrom/yearTo provided
+ *   6. Take top MAX_DOCUMENTS from filtered set
+ *   7. Return SearchResult[] with metadata (no full text)
  */
 
 import OpenAI from "openai";
@@ -42,7 +44,7 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
   ): Promise<SearchResult[]> => {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      console.error("[retriever] Missing OPENAI_API_KEY");
+      console.log(JSON.stringify({ event: "vectorize_search_error", error: "Missing OPENAI_API_KEY" }));
       return [];
     }
 
@@ -63,7 +65,7 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
       });
 
       if (!results.matches || results.matches.length === 0) {
-        console.log(`[retriever] query="${query.slice(0, 50)}" → 0 matches`);
+        console.log(JSON.stringify({ event: "vectorize_search", query: query.slice(0, 200), chunksMatched: 0, returned: 0 }));
         return [];
       }
 
@@ -87,12 +89,11 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
         }
       }
 
-      // 4. Sort by score, take top MAX_DOCUMENTS
+      // 4. Sort by score (all unique docs, before filtering)
       const sortedDocs = Array.from(docMap.entries())
-        .sort((a, b) => b[1].score - a[1].score)
-        .slice(0, MAX_DOCUMENTS);
+        .sort((a, b) => b[1].score - a[1].score);
 
-      // 5. Fetch metadata via getByIds for representative vectors
+      // 5. Fetch metadata for ALL unique docs (need year for filtering)
       const representativeIds = sortedDocs.map(([, doc]) => doc.representativeId);
       const vectors = await client.getByIds(representativeIds);
 
@@ -104,12 +105,44 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
         }
       }
 
-      console.log(
-        `[retriever] query="${query.slice(0, 50)}" → ${results.matches.length} chunks → ${sortedDocs.length} docs`,
-      );
+      // 6. Apply year filtering if yearFrom/yearTo provided
+      let filteredDocs = sortedDocs;
+      if (yearFrom || yearTo) {
+        filteredDocs = sortedDocs.filter(([, doc]) => {
+          const meta = metaLookup.get(doc.representativeId);
+          if (!meta?.year) return true; // keep docs without year metadata
+          const year = parseInt(meta.year, 10);
+          if (isNaN(year)) return true;
+          if (yearFrom && year < yearFrom) return false;
+          if (yearTo && year > yearTo) return false;
+          return true;
+        });
+        console.log(JSON.stringify({
+          event: "vectorize_year_filter",
+          yearFrom,
+          yearTo,
+          before: sortedDocs.length,
+          after: filteredDocs.length,
+        }));
+      }
 
-      // 6. Return as SearchResult (metadata only, no full text)
-      return sortedDocs.map(([, doc]) => {
+      // 7. Take top MAX_DOCUMENTS from filtered set
+      const topDocs = filteredDocs.slice(0, MAX_DOCUMENTS);
+
+      console.log(JSON.stringify({
+        event: "vectorize_search",
+        query: query.slice(0, 200),
+        yearFrom,
+        yearTo,
+        chunksMatched: results.matches.length,
+        uniqueDocs: sortedDocs.length,
+        afterYearFilter: filteredDocs.length,
+        returned: topDocs.length,
+        topScore: topDocs[0]?.[1]?.score ?? 0,
+      }));
+
+      // 8. Return as SearchResult (metadata only, no full text)
+      return topDocs.map(([, doc]) => {
         const meta = metaLookup.get(doc.representativeId) ?? {};
         return {
           doc_id: meta.doc_id ?? "",
@@ -122,7 +155,11 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[retriever] Search failed:", message);
+      console.log(JSON.stringify({
+        event: "vectorize_search_error",
+        query: query.slice(0, 200),
+        error: message,
+      }));
       return [{
         doc_id: "",
         title: "SEARCH ERROR",

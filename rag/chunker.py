@@ -33,6 +33,29 @@ _PATH_TO_COURT: dict[str, str] = {
     "clr": "clr",
 }
 
+# Court → court_level mapping
+_COURT_LEVEL: dict[str, str] = {
+    "aad": "supreme",              # old Supreme Court
+    "supreme": "supreme",          # new Supreme Court
+    "supremeAdministrative": "supreme",  # Supreme Constitutional Court
+    "areiospagos": "supreme",      # Areios Pagos (Greek Supreme Court cases)
+    "courtOfAppeal": "appeal",     # Court of Appeal
+    "administrativeCourtOfAppeal": "appeal",  # Administrative Court of Appeal
+    "apofaseised": "first_instance",  # First Instance Courts
+    "administrative": "administrative",  # Administrative Court
+    "administrativeIP": "administrative",  # Administrative Court (Int'l Protection)
+    "juvenileCourt": "first_instance",    # Juvenile Court
+    "epa": "other",                # Competition Commission
+    "aap": "other",                # Tender Review Authority
+    "jsc": "supreme",             # Judgments of Supreme Court (English)
+    "rscc": "supreme",            # Supreme Constitutional Court 1960-63
+    "clr": "supreme",             # Cyprus Law Reports
+    "dioikitiko": "administrative",
+}
+
+# Subcourt codes for apofaseised (First Instance) courts
+_SUBCOURT_CODES = {"pol", "poin", "oik", "enoik", "erg"}
+
 
 @dataclass
 class Chunk:
@@ -44,6 +67,8 @@ class Chunk:
     court: str
     year: str
     chunk_index: int
+    court_level: str = ""       # supreme | appeal | first_instance | administrative | other
+    subcourt: str = ""          # pol | poin | oik | enoik | erg (only for apofaseised)
     cross_refs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -57,6 +82,24 @@ def _detect_court(rel_path: str) -> str:
             return court_id
     parts = Path(rel_path).parts
     return parts[0] if parts else "unknown"
+
+
+def _detect_court_level(court: str) -> str:
+    """Map court identifier to hierarchical level."""
+    return _COURT_LEVEL.get(court, "other")
+
+
+def _detect_subcourt(doc_id: str, court: str) -> str:
+    """Extract subcourt code from doc_id for First Instance courts.
+
+    Example: 'apofaseised/oik/2024/file.md' → 'oik'
+    """
+    if court != "apofaseised":
+        return ""
+    parts = doc_id.split("/")
+    if len(parts) >= 2 and parts[1] in _SUBCOURT_CODES:
+        return parts[1]
+    return ""
 
 
 def _detect_year(rel_path: str) -> str:
@@ -114,6 +157,8 @@ def chunk_document(text: str, doc_id: str) -> list[Chunk]:
     title = _extract_title(text)
     court = _detect_court(doc_id)
     year = _detect_year(doc_id)
+    court_level = _detect_court_level(court)
+    subcourt = _detect_subcourt(doc_id, court)
 
     raw_chunks = _splitter.split_text(text)
     chunks: list[Chunk] = []
@@ -128,6 +173,8 @@ def chunk_document(text: str, doc_id: str) -> list[Chunk]:
                 court=court,
                 year=year,
                 chunk_index=i,
+                court_level=court_level,
+                subcourt=subcourt,
                 cross_refs=cross_refs,
             )
         )

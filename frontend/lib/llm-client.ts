@@ -369,6 +369,7 @@ Document ID: ${docId}`;
 
 let _fetchDocumentFn: FetchDocumentFn | null = null;
 let _lastUserQuery = "";
+let _sessionId = "unknown";
 
 export function setFetchDocumentFn(fn: FetchDocumentFn) {
   _fetchDocumentFn = fn;
@@ -376,6 +377,10 @@ export function setFetchDocumentFn(fn: FetchDocumentFn) {
 
 export function setLastUserQuery(query: string) {
   _lastUserQuery = query;
+}
+
+export function setSessionId(id: string) {
+  _sessionId = id;
 }
 
 async function handleSummarizeDocuments(
@@ -388,7 +393,7 @@ async function handleSummarizeDocuments(
   }
 
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const docIds = args.doc_ids.slice(0, 30); // Max 30 docs
+  const docIds = args.doc_ids;
 
   emit({
     event: "summarizing",
@@ -439,9 +444,14 @@ async function handleSummarizeDocuments(
   }
 
   const summarizerCost = (totalIn / 1_000_000) * 2.5 + (totalOut / 1_000_000) * 10;
-  console.log(
-    `[Summarizer] ${summaryResults.length} docs, in=${totalIn} out=${totalOut} cost=$${summarizerCost.toFixed(4)}`,
-  );
+  console.log(JSON.stringify({
+    event: "summarize_complete",
+    sessionId: _sessionId,
+    docsCount: summaryResults.length,
+    inputTokens: totalIn,
+    outputTokens: totalOut,
+    costUsd: parseFloat(summarizerCost.toFixed(4)),
+  }));
 
   return {
     text: parts.join("\n\n"),
@@ -554,11 +564,24 @@ async function streamOpenAI(
             args.query ?? "", args.court, args.year_from, args.year_to,
           );
 
-          for (const r of results) {
-            if (r.doc_id && !allSources.some((s) => s.doc_id === r.doc_id)) {
-              allSources.push({ ...r, text: r.text.slice(0, 400) });
-            }
+          const newResults = results.filter(
+            (r) => r.doc_id && !allSources.some((s) => s.doc_id === r.doc_id),
+          );
+          for (const r of newResults) {
+            allSources.push({ ...r, text: r.text.slice(0, 400) });
           }
+
+          console.log(JSON.stringify({
+            event: "search",
+            sessionId: _sessionId,
+            step: searchStep,
+            query: (args.query ?? "").slice(0, 200),
+            yearFrom: args.year_from,
+            yearTo: args.year_to,
+            resultsCount: results.length,
+            newUniqueCount: newResults.length,
+            totalSources: allSources.length,
+          }));
 
           apiMessages.push({
             role: "tool",
@@ -612,11 +635,22 @@ async function streamOpenAI(
                            (summarizerOutputTokens / 1_000_000) * 10;
     const totalCost = mainCost + summarizerCost;
 
-    console.log(
-      `[LLM] main: ${modelCfg.label} in=${totalInputTokens} out=${totalOutputTokens} cost=$${mainCost.toFixed(4)} | ` +
-      `summarizer: ${documentsAnalyzed} docs in=${summarizerInputTokens} out=${summarizerOutputTokens} cost=$${summarizerCost.toFixed(4)} | ` +
-      `total=$${totalCost.toFixed(4)}`,
-    );
+    console.log(JSON.stringify({
+      event: "chat_complete",
+      sessionId: _sessionId,
+      provider: "openai",
+      model: modelCfg.label,
+      mainInputTokens: totalInputTokens,
+      mainOutputTokens: totalOutputTokens,
+      mainCostUsd: parseFloat(mainCost.toFixed(4)),
+      summarizerDocsAnalyzed: documentsAnalyzed,
+      summarizerInputTokens,
+      summarizerOutputTokens,
+      summarizerCostUsd: parseFloat(summarizerCost.toFixed(4)),
+      totalCostUsd: parseFloat(totalCost.toFixed(4)),
+      searchSteps: searchStep,
+      sourcesFound: allSources.length,
+    }));
 
     emit({
       event: "usage",
@@ -635,6 +669,14 @@ async function streamOpenAI(
 
   // Exhausted rounds
   if (allSources.length > 0) emit({ event: "sources", data: allSources });
+  console.log(JSON.stringify({
+    event: "chat_exhausted_rounds",
+    sessionId: _sessionId,
+    provider: "openai",
+    model: modelCfg.label,
+    rounds: MAX_TOOL_ROUNDS,
+    sourcesFound: allSources.length,
+  }));
   emit({ event: "token", data: "I performed multiple searches but couldn't find a complete answer. Please try rephrasing your question." });
   emit({ event: "done", data: {} });
 }
@@ -698,11 +740,24 @@ async function streamClaude(
             args.year_to as number | undefined,
           );
 
-          for (const r of results) {
-            if (r.doc_id && !allSources.some((s) => s.doc_id === r.doc_id)) {
-              allSources.push({ ...r, text: r.text.slice(0, 400) });
-            }
+          const newResults = results.filter(
+            (r) => r.doc_id && !allSources.some((s) => s.doc_id === r.doc_id),
+          );
+          for (const r of newResults) {
+            allSources.push({ ...r, text: r.text.slice(0, 400) });
           }
+
+          console.log(JSON.stringify({
+            event: "search",
+            sessionId: _sessionId,
+            step: searchStep,
+            query: ((args.query as string) ?? "").slice(0, 200),
+            yearFrom: args.year_from as number | undefined,
+            yearTo: args.year_to as number | undefined,
+            resultsCount: results.length,
+            newUniqueCount: newResults.length,
+            totalSources: allSources.length,
+          }));
 
           toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: formatSearchResults(results) });
         } else if (toolUse.name === "summarize_documents") {
@@ -750,6 +805,24 @@ async function streamClaude(
     const mainCost = calculateCost(modelCfg, totalInputTokens, totalOutputTokens);
     const summarizerCost = (summarizerInputTokens / 1_000_000) * 2.5 +
                            (summarizerOutputTokens / 1_000_000) * 10;
+    const totalCost = mainCost + summarizerCost;
+
+    console.log(JSON.stringify({
+      event: "chat_complete",
+      sessionId: _sessionId,
+      provider: "anthropic",
+      model: modelCfg.label,
+      mainInputTokens: totalInputTokens,
+      mainOutputTokens: totalOutputTokens,
+      mainCostUsd: parseFloat(mainCost.toFixed(4)),
+      summarizerDocsAnalyzed: documentsAnalyzed,
+      summarizerInputTokens,
+      summarizerOutputTokens,
+      summarizerCostUsd: parseFloat(summarizerCost.toFixed(4)),
+      totalCostUsd: parseFloat(totalCost.toFixed(4)),
+      searchSteps: searchStep,
+      sourcesFound: allSources.length,
+    }));
 
     emit({
       event: "usage",
@@ -758,7 +831,7 @@ async function streamClaude(
         inputTokens: totalInputTokens + summarizerInputTokens,
         outputTokens: totalOutputTokens + summarizerOutputTokens,
         totalTokens: totalInputTokens + totalOutputTokens + summarizerInputTokens + summarizerOutputTokens,
-        costUsd: mainCost + summarizerCost,
+        costUsd: totalCost,
         documentsAnalyzed,
       } as UsageData,
     });
@@ -767,6 +840,14 @@ async function streamClaude(
   }
 
   if (allSources.length > 0) emit({ event: "sources", data: allSources });
+  console.log(JSON.stringify({
+    event: "chat_exhausted_rounds",
+    sessionId: _sessionId,
+    provider: "anthropic",
+    model: modelCfg.label,
+    rounds: MAX_TOOL_ROUNDS,
+    sourcesFound: allSources.length,
+  }));
   emit({ event: "token", data: "Multiple searches performed but no complete answer found." });
   emit({ event: "done", data: {} });
 }

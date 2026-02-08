@@ -13,7 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { chatStream, setFetchDocumentFn } from "@/lib/llm-client";
+import { chatStream, setFetchDocumentFn, setSessionId } from "@/lib/llm-client";
 import { localFetchDocument } from "@/lib/local-retriever";
 import { createVectorizeSearchFn } from "@/lib/retriever";
 import { createBindingClient, createHttpClient } from "@/lib/vectorize-client";
@@ -146,7 +146,7 @@ if (isDev) {
 }
 
 export async function POST(request: NextRequest) {
-  let body: { messages?: ChatMessage[]; model?: string; translate?: boolean };
+  let body: { messages?: ChatMessage[]; model?: string; translate?: boolean; sessionId?: string };
 
   try {
     body = await request.json();
@@ -157,10 +157,25 @@ export async function POST(request: NextRequest) {
   const messages = body.messages ?? [];
   const model = body.model ?? "gpt-4o";
   const translate = body.translate ?? false;
+  const sessionId = body.sessionId ?? "unknown";
 
   if (messages.length === 0) {
     return NextResponse.json({ error: "No messages" }, { status: 400 });
   }
+
+  // Set session context for structured logging
+  setSessionId(sessionId);
+
+  const userQuery = messages[messages.length - 1]?.content ?? "";
+  console.log(JSON.stringify({
+    event: "chat_request",
+    sessionId,
+    model,
+    translate,
+    messageCount: messages.length,
+    queryLength: userQuery.length,
+    queryPreview: userQuery.slice(0, 200),
+  }));
 
   // Same Vectorize search in dev and production — different transport only
   const vectorizeClient = isDev

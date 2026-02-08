@@ -4,23 +4,31 @@
 Uses the Batch API for embeddings — 50% cheaper, separate rate limits,
 no TPM throttling. Completes in minutes instead of hours.
 
-Three-step pipeline:
-    1. prepare  — chunk docs, create batch JSONL files + metadata index
-    2. submit   — upload batch files to OpenAI, create batch jobs
-    3. collect  — download embeddings, upload vectors to Vectorize
+Pipeline steps:
+    1. prepare   — chunk docs, create batch JSONL files + metadata index
+    2. submit    — upload batch files to OpenAI, create batch jobs
+    3. collect   — download embeddings, create metadata indexes, upload to Vectorize
+    4. reupload  — re-upload existing embeddings (after metadata index changes, no API cost)
 
 Usage:
+    python scripts/batch_ingest.py run                    # full pipeline (prepare → submit → collect)
+    python scripts/batch_ingest.py reupload               # re-upload with metadata indexes (no OpenAI cost)
+
     python scripts/batch_ingest.py prepare                # chunk & create batches
     python scripts/batch_ingest.py submit                 # send to OpenAI
     python scripts/batch_ingest.py status                 # check progress
     python scripts/batch_ingest.py collect                # download & upload to Vectorize
-    python scripts/batch_ingest.py run                    # all steps in sequence
 
     python scripts/batch_ingest.py prepare --limit 1000   # test with subset
     python scripts/batch_ingest.py prepare --court aad    # one court only
 
 Environment:
     OPENAI_API_KEY, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
+
+Metadata indexes:
+    The script automatically creates required metadata indexes (year, court)
+    on Vectorize before uploading vectors. This ensures metadata filtering
+    works for all uploaded vectors. See REQUIRED_METADATA_INDEXES constant.
 """
 
 import argparse
@@ -46,7 +54,7 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from rag.chunker import chunk_document, _detect_court
+from rag.chunker import chunk_document, _detect_court, _detect_court_level, _detect_subcourt
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +62,8 @@ logger = logging.getLogger(__name__)
 
 OPENAI_MODEL = "text-embedding-3-small"
 OPENAI_DIMS = 1536
-VECTORIZE_INDEX = "cylaw-search"
+VECTORIZE_INDEX_DEFAULT = "cyprus-law-cases-search"
+VECTORIZE_INDEX = VECTORIZE_INDEX_DEFAULT  # overridden by --index CLI arg
 CF_API_BASE = "https://api.cloudflare.com/client/v4"
 
 INPUT_DIR = PROJECT_ROOT / "data" / "cases_parsed"
@@ -113,12 +122,85 @@ def _cf_headers() -> dict:
     }
 
 
-def _cf_insert_url() -> str:
+def _cf_upsert_url() -> str:
+    """Upsert endpoint — creates new vectors or overwrites existing ones.
+
+    MUST use upsert (not insert) for reupload/metadata refresh scenarios,
+    because insert silently skips vectors with existing IDs.
+    """
     acct = os.environ["CLOUDFLARE_ACCOUNT_ID"]
     return (
         f"{CF_API_BASE}/accounts/{acct}"
-        f"/vectorize/v2/indexes/{VECTORIZE_INDEX}/insert"
+        f"/vectorize/v2/indexes/{VECTORIZE_INDEX}/upsert"
     )
+
+
+def _cf_json_headers() -> dict:
+    token = os.environ["CLOUDFLARE_API_TOKEN"]
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+
+def _cf_index_url() -> str:
+    acct = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+    return (
+        f"{CF_API_BASE}/accounts/{acct}"
+        f"/vectorize/v2/indexes/{VECTORIZE_INDEX}"
+    )
+
+
+# Required metadata indexes — extend this list to add new filterable fields
+REQUIRED_METADATA_INDEXES = [
+    {"propertyName": "year", "indexType": "string"},
+    {"propertyName": "court", "indexType": "string"},
+    {"propertyName": "court_level", "indexType": "string"},
+    {"propertyName": "subcourt", "indexType": "string"},
+]
+
+
+def ensure_metadata_indexes() -> None:
+    """Create metadata indexes on Vectorize if they don't exist.
+
+    Must be called BEFORE uploading vectors — vectors upserted before
+    an index is created won't be included in that index.
+    """
+    base = _cf_index_url()
+    headers = _cf_json_headers()
+
+    # List existing indexes
+    resp = http_requests.get(f"{base}/metadata_index/list", headers=headers, timeout=30)
+    if resp.status_code != 200:
+        print(f"  Warning: could not list metadata indexes ({resp.status_code})")
+        existing = []
+    else:
+        data = resp.json()
+        existing = [
+            idx["propertyName"]
+            for idx in data.get("result", {}).get("metadataIndexes", [])
+        ]
+
+    print(f"\n[Metadata Indexes] Existing: {existing or 'none'}")
+
+    for idx_def in REQUIRED_METADATA_INDEXES:
+        name = idx_def["propertyName"]
+        if name in existing:
+            print(f"  ✓ {name} ({idx_def['indexType']}) — already exists")
+            continue
+
+        resp = http_requests.post(
+            f"{base}/metadata_index/create",
+            headers=headers,
+            json=idx_def,
+            timeout=30,
+        )
+        if resp.status_code == 200 and resp.json().get("success"):
+            print(f"  ✓ {name} ({idx_def['indexType']}) — created")
+        else:
+            print(f"  ✗ {name} — failed: {resp.text[:150]}")
+
+    print()
 
 
 # ── Step 1: Prepare ────────────────────────────────────────────────
@@ -163,6 +245,8 @@ def step_prepare(court: Optional[str] = None, limit: Optional[int] = None) -> No
                 "year": chunk["year"],
                 "title": chunk["title"][:200],
                 "chunk_index": chunk["chunk_index"],
+                "court_level": chunk.get("court_level", _detect_court_level(chunk["court"])),
+                "subcourt": chunk.get("subcourt", _detect_subcourt(chunk["doc_id"], chunk["court"])),
             }
             mf.write(json.dumps(meta, ensure_ascii=False) + "\n")
 
@@ -361,6 +445,8 @@ def _parse_batch_vectors(content_text: str, meta_index: list) -> list:
                     "year": meta["year"],
                     "title": meta["title"],
                     "chunk_index": meta["chunk_index"],
+                    "court_level": meta.get("court_level", _detect_court_level(meta["court"])),
+                    "subcourt": meta.get("subcourt", _detect_subcourt(meta["doc_id"], meta["court"])),
                 },
             })
     return vectors
@@ -369,9 +455,12 @@ def _parse_batch_vectors(content_text: str, meta_index: list) -> list:
 def step_collect() -> None:
     """Download embedding results and upload to Vectorize — parallel."""
     state = load_state()
-    if state["phase"] not in ("submitted", "collecting"):
+    if state["phase"] not in ("submitted", "collecting", "done"):
         print(f"Current phase: {state['phase']}. Run submit first.")
         return
+
+    # Ensure metadata indexes exist BEFORE uploading vectors
+    ensure_metadata_indexes()
 
     openai_key = os.environ["OPENAI_API_KEY"]
 
@@ -383,7 +472,7 @@ def step_collect() -> None:
             meta_index.append(json.loads(line))
     print(f"  {len(meta_index):,} chunk metadata entries loaded.")
 
-    cf_url = _cf_insert_url()
+    cf_url = _cf_upsert_url()
     cf_headers = _cf_headers()
 
     # Count already collected
@@ -408,9 +497,12 @@ def step_collect() -> None:
     total_failed = 0
     t0 = time.time()
 
-    # Pipeline: prefetch next batch while uploading current one
-    # Uses a background thread for OpenAI downloads
-    download_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+    # Parallel pipeline:
+    #   - Download pool: 6 threads fetching batch files from OpenAI in parallel
+    #   - Upload pool: 6 threads uploading NDJSON chunks to Vectorize in parallel
+    #   - As each download completes, its vectors are parsed and queued for upload
+    DOWNLOAD_WORKERS = 10
+    download_pool = concurrent.futures.ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS)
     upload_pool = concurrent.futures.ThreadPoolExecutor(max_workers=UPLOAD_WORKERS)
 
     def download_batch(b: dict) -> tuple:
@@ -419,7 +511,7 @@ def step_collect() -> None:
         content = client.files.content(b["output_file_id"])
         return b, content.text
 
-    # Submit all downloads
+    # Submit ALL downloads at once — pool limits concurrency to DOWNLOAD_WORKERS
     download_futures = {
         download_pool.submit(download_batch, b): b for b in to_collect
     }
@@ -447,8 +539,8 @@ def step_collect() -> None:
         del vectors  # free memory before upload
 
         # Upload all chunks in parallel
-        upload_futures = [upload_pool.submit(_upload_chunk, c) for c in ndjson_chunks]
-        batch_uploaded = sum(f.result() for f in upload_futures)
+        upload_futures_list = [upload_pool.submit(_upload_chunk, c) for c in ndjson_chunks]
+        batch_uploaded = sum(f.result() for f in upload_futures_list)
         batch_total = sum(c[0].count(b"\n") + 1 for c in ndjson_chunks)
         batch_failed = batch_total - batch_uploaded
 
@@ -484,6 +576,106 @@ def step_collect() -> None:
 
 
 # ── Run all steps ───────────────────────────────────────────────────
+
+def step_reupload() -> None:
+    """Re-upload existing embeddings to Vectorize (no OpenAI calls).
+
+    Use when:
+      - Metadata indexes were created after initial upload
+      - Vectors need re-indexing for metadata filtering
+      - Upload was interrupted and needs to resume
+
+    Resets the 'collected' flag on all completed batches and re-runs collect.
+    """
+    state = load_state()
+    if state["phase"] not in ("done", "collecting", "submitted"):
+        print(f"Current phase: {state['phase']}. Need completed batches to reupload.")
+        return
+
+    # Reset collected flags
+    reset_count = 0
+    for b in state["batches"]:
+        if b["status"] == "completed" and b.get("output_file_id"):
+            b["collected"] = False
+            b["uploaded"] = 0
+            reset_count += 1
+
+    state["phase"] = "submitted"  # allow collect to run
+    state["total_uploaded"] = 0
+    save_state(state)
+
+    print(f"\nReset {reset_count} batches for re-upload.")
+    print(f"Embeddings will be re-downloaded from OpenAI file storage (no new API cost).")
+    print(f"Vectors will be re-upserted to Vectorize with metadata indexes.\n")
+
+    step_collect()
+
+
+def step_full_reset() -> None:
+    """Delete Vectorize index, recreate with metadata indexes, then reupload.
+
+    WARNING: This causes downtime — the index is empty until reupload completes.
+    Use 'reupload' instead if you just need to refresh metadata.
+    """
+    import subprocess
+
+    acct = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+    token = os.environ["CLOUDFLARE_API_TOKEN"]
+    headers = _cf_json_headers()
+    base = f"{CF_API_BASE}/accounts/{acct}/vectorize/v2/indexes"
+
+    # 1. Delete existing index
+    print(f"\n[1/4] Deleting index '{VECTORIZE_INDEX}'...")
+    resp = http_requests.delete(f"{base}/{VECTORIZE_INDEX}", headers=headers, timeout=30)
+    if resp.status_code == 200:
+        print(f"  ✓ Index deleted")
+    else:
+        print(f"  Response: {resp.status_code} {resp.text[:150]}")
+
+    # Wait for deletion to propagate
+    print("  Waiting 10s for deletion to propagate...")
+    time.sleep(10)
+
+    # 2. Recreate index
+    print(f"\n[2/4] Creating index '{VECTORIZE_INDEX}' (dims={OPENAI_DIMS}, metric=cosine)...")
+    resp = http_requests.post(
+        base,
+        headers=headers,
+        json={
+            "name": VECTORIZE_INDEX,
+            "config": {
+                "dimensions": OPENAI_DIMS,
+                "metric": "cosine",
+            },
+        },
+        timeout=30,
+    )
+    resp_data = resp.json()
+    if resp.status_code == 200 and resp_data.get("success"):
+        print(f"  ✓ Index created")
+    elif resp_data.get("result", {}).get("name") == VECTORIZE_INDEX:
+        # Index was created even if success flag is missing
+        print(f"  ✓ Index created (confirmed by name)")
+    else:
+        print(f"  ✗ Failed: {resp.status_code} {json.dumps(resp_data, indent=2)[:300]}")
+        return
+
+    # Wait for creation to propagate
+    print("  Waiting 5s for creation to propagate...")
+    time.sleep(5)
+
+    # 3. Create metadata indexes
+    print(f"\n[3/4] Creating metadata indexes...")
+    ensure_metadata_indexes()
+
+    # Wait for indexes to propagate
+    print("  Waiting 5s for metadata indexes to propagate...")
+    time.sleep(5)
+
+    # 4. Reupload
+    print(f"\n[4/4] Starting reupload...")
+    step_reupload()
+
 
 def step_run(court: Optional[str] = None, limit: Optional[int] = None) -> None:
     """Run all steps: prepare, submit, then collect with parallel uploads."""
@@ -534,13 +726,18 @@ def main():
     )
     parser.add_argument(
         "command",
-        choices=["prepare", "submit", "status", "collect", "run", "reset"],
+        choices=["prepare", "submit", "status", "collect", "reupload", "full-reset", "run", "reset"],
         help="Pipeline step to run",
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--court", type=str, default=None)
+    parser.add_argument("--index", type=str, default=VECTORIZE_INDEX_DEFAULT,
+                        help=f"Vectorize index name (default: {VECTORIZE_INDEX_DEFAULT})")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
+
+    global VECTORIZE_INDEX
+    VECTORIZE_INDEX = args.index
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,
@@ -548,11 +745,17 @@ def main():
         datefmt="%H:%M:%S",
     )
 
+    print(f"Using Vectorize index: {VECTORIZE_INDEX}")
+
     if args.command == "reset":
         if BATCH_DIR.exists():
             import shutil
             shutil.rmtree(BATCH_DIR)
             print("Batch data cleared.")
+        return
+
+    if args.command == "full-reset":
+        step_full_reset()
         return
 
     if args.command == "prepare":
@@ -563,6 +766,8 @@ def main():
         step_status()
     elif args.command == "collect":
         step_collect()
+    elif args.command == "reupload":
+        step_reupload()
     elif args.command == "run":
         step_run(court=args.court, limit=args.limit)
 

@@ -6,7 +6,7 @@
  * - Dev: uses Cloudflare REST API over HTTPS (needs API token)
  */
 
-const INDEX_NAME = "cylaw-search";
+const INDEX_NAME = "cyprus-law-cases-search";
 
 // ── Shared types ────────────────────────────────────────
 

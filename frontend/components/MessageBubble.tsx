@@ -9,6 +9,7 @@ interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
   sources?: SearchResult[];
+  summaryCache?: Record<string, string>;
   activityLog?: ActivityEntry[];
   isStreaming?: boolean;
   usage?: UsageData | null;
@@ -64,6 +65,7 @@ export function MessageBubble({
   role,
   content,
   sources,
+  summaryCache,
   activityLog,
   isStreaming,
   usage,
@@ -124,7 +126,7 @@ export function MessageBubble({
 
         {/* Source cards — collapsed by default */}
         {sources && sources.length > 0 && (
-          <SourceList sources={sources} onSourceClick={onSourceClick} />
+          <SourceList sources={sources} summaryCache={summaryCache} onSourceClick={onSourceClick} />
         )}
 
         {/* Usage / cost info */}
