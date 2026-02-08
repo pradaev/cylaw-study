@@ -70,11 +70,22 @@ export function createBindingClient(env: CloudflareEnv): VectorizeClient {
       };
     },
     async getByIds(ids) {
-      const vectors = await env.VECTORIZE.getByIds(ids);
-      return vectors.map((v) => ({
-        id: v.id,
-        metadata: v.metadata as Record<string, string> | undefined,
-      }));
+      // Worker binding also has 20 ID limit per request
+      const BATCH_SIZE = 20;
+      const allVectors: VectorizeVector[] = [];
+
+      for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+        const batch = ids.slice(i, i + BATCH_SIZE);
+        const vectors = await env.VECTORIZE.getByIds(batch);
+        allVectors.push(
+          ...vectors.map((v) => ({
+            id: v.id,
+            metadata: v.metadata as Record<string, string> | undefined,
+          })),
+        );
+      }
+
+      return allVectors;
     },
   };
 }
