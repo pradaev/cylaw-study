@@ -93,18 +93,19 @@ export function SourceCard({ source, summary, onClick }: SourceCardProps) {
           </div>
         </button>
 
-        {/* Relevance badge */}
-        {relevance ? (
-          <span
-            className={`text-[10px] px-2 py-0.5 rounded-full font-semibold whitespace-nowrap ml-1 shrink-0 border ${relevanceStyle}`}
-          >
-            {RELEVANCE_LABELS[relevance]}
+        {/* Relevance badge + score */}
+        <div className="flex items-center gap-1.5 ml-1 shrink-0">
+          {relevance ? (
+            <span
+              className={`text-[10px] px-2 py-0.5 rounded-full font-semibold whitespace-nowrap border ${relevanceStyle}`}
+            >
+              {RELEVANCE_LABELS[relevance]}
+            </span>
+          ) : null}
+          <span className="text-[10px] px-1.5 py-0.5 rounded font-mono whitespace-nowrap bg-zinc-800/60 text-zinc-500">
+            {(source.score * 100).toFixed(1)}%
           </span>
-        ) : (
-          <span className="text-[11px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap ml-1 shrink-0 bg-zinc-800 text-zinc-500">
-            {(source.score * 100).toFixed(0)}%
-          </span>
-        )}
+        </div>
       </div>
 
       {/* Expanded summary */}

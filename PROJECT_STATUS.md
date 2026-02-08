@@ -70,8 +70,10 @@ User -> Next.js (Cloudflare Worker) -> API Routes
 - **Auto-summarization** — LLM's doc_id selection overridden; system always summarizes ALL documents from search results
 - **Document viewer** — click any case to read full text with AI summary panel — `frontend/app/api/doc/route.ts`
 - **R2 integration** — all 149,886 docs in R2, fetched in both dev (S3 API) and prod (binding)
-- **Vectorize search** — unified client for dev (REST API) and prod (binding), up to 30 unique docs per search, year filtering — `frontend/lib/retriever.ts`
-- **Metadata filtering** — Vectorize indexes for `year`, `court`, `court_level`, `subcourt` — enables court-level prioritization
+- **Vectorize search** — unified client for dev (REST API) and prod (binding), up to 30 unique docs per search, year filtering, court_level filtering — `frontend/lib/retriever.ts`
+- **Metadata filtering** — Vectorize indexes for `year`, `court`, `court_level`, `subcourt` — all populated and working
+- **Court-level prioritization** — `search_cases` tool accepts `court_level` param, LLM does mandatory searches: supreme (English + Greek) → appeal → broad
+- **Score boost** — Supreme Court ×1.15, Appeal ×1.10 score multiplier in retriever
 - **Sources UI** — expandable source cards with inline AI summary, sorted by relevance then year — `frontend/components/SourceCard.tsx`
 - **Structured logging** — JSON logs with sessionId, search queries, costs, errors → Cloudflare Workers Logs
 - **Test suite** — `npm test` runs typecheck + lint + search regression (14 assertions) + summarizer eval (28 assertions)
@@ -84,8 +86,9 @@ User -> Next.js (Cloudflare Worker) -> API Routes
 
 ### High Priority
 
-1. **Re-deploy to production** — new Vectorize index, logging, UI changes need `wrangler deploy`
-2. **Implement contextual header prepend** (Improvement 2) — prepend court/case metadata to chunks before embedding, reduces retrieval failures by 49% (see Chunking Improvements section below)
+1. **Re-deploy to production** — new Vectorize index, court_level filter, logging, UI changes need `wrangler deploy`
+2. **Delete old `cylaw-search` index** — deprecated, stuck mutation queue, wastes resources
+3. **Implement contextual header prepend** (Improvement 2) — prepend court/case metadata to chunks before embedding, reduces retrieval failures by 49% (see Chunking Improvements section below)
 
 ### Medium Priority
 
@@ -167,21 +170,21 @@ Pre-commit hook (`.githooks/pre-commit`) auto-runs TypeScript + ESLint.
 
 ## Last Session Log
 
-### 2026-02-08 (session 2 — metadata indexes, tests, logging, UI)
-- Removed 30-doc limit on summarization — now summarizes ALL found documents (no cap)
-- Added year filtering to retriever (post-query filtering on metadata)
-- Created Vectorize metadata indexes: `year`, `court`, `court_level`, `subcourt`
-- Added `court_level` and `subcourt` fields to `Chunk` dataclass in `rag/chunker.py`
-- Updated `batch_ingest.py`: upsert (not insert), `--index` flag, `reupload`, `full-reset`, 10 download threads, auto metadata index creation
-- Migrated from old `cylaw-search` index to new `cyprus-law-cases-search` (old index had stuck mutation queue)
-- Standardized tests into `tests/` directory with unified runner (`tests/run.mjs`)
-- Added `npm test`, `npm run test:fast`, `npm run test:integration` scripts
-- Added git pre-commit hook for TypeScript + ESLint
-- Deleted 5 legacy one-off test scripts from `scripts/`
-- Redesigned Sources UI: expandable cards with inline AI summary, relevance badges (High/Medium/Low), sorted by relevance then year
-- Added structured JSON logging: `chat_request`, `search`, `vectorize_search`, `summarize_complete`, `chat_complete` events
-- Added session tracking (`sessionId` from client → all logs)
-- Enabled Cloudflare Workers Logs (`observability.enabled: true`, 100% sampling)
+### 2026-02-08 (session 2 — metadata, filters, tests, logging, UI)
+- Removed doc summarization limit — now summarizes ALL found documents
+- Added year filtering and court_level filtering to retriever (Vectorize metadata filters)
+- Created new Vectorize index `cyprus-law-cases-search` with 4 metadata indexes (year, court, court_level, subcourt)
+- **Full re-upload completed**: 2,269,131 vectors with enriched metadata (court_level, subcourt)
+- Added `court_level` param to `search_cases` tool — LLM can filter by court hierarchy
+- Added court-level score boost: Supreme ×1.15, Appeal ×1.10
+- Updated system prompt: mandatory 4-phase search (supreme English → supreme Greek → appeal → broad)
+- Updated court names in UI: unified "Supreme Court" for aad/supreme/jsc/rscc
+- Removed Sources section from LLM output (handled by UI)
+- Added relevance scores to Source cards and LLM answer text
+- batch_ingest.py: `--index` flag, `reupload`, `full-reset`, upsert endpoint, 10 download threads
+- Standardized tests into `tests/`, added pre-commit hook, npm test scripts
+- Sources UI: expandable cards with inline summary, relevance badges, sorted by relevance+year
+- Structured JSON logging with sessionId → Cloudflare Workers Logs
 
 ### 2026-02-08 (session 1 — Vectorize frontend integration)
 - Wired Vectorize into frontend, created VectorizeClient abstraction

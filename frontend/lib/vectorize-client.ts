@@ -26,10 +26,22 @@ export interface VectorizeVector {
   metadata?: Record<string, string>;
 }
 
+export type MetadataFilterValue = string | number | boolean | null | {
+  $eq?: string | number | boolean | null;
+  $ne?: string | number | boolean | null;
+  $in?: (string | number | boolean | null)[];
+  $nin?: (string | number | boolean | null)[];
+  $lt?: string | number;
+  $lte?: string | number;
+  $gt?: string | number;
+  $gte?: string | number;
+};
+
 export interface VectorizeQueryOptions {
   topK: number;
   returnMetadata: "none" | "indexed" | "all";
   returnValues: boolean;
+  filter?: Record<string, MetadataFilterValue>;
 }
 
 export interface VectorizeClient {
@@ -46,6 +58,7 @@ export function createBindingClient(env: CloudflareEnv): VectorizeClient {
         topK: options.topK,
         returnMetadata: options.returnMetadata,
         returnValues: options.returnValues,
+        ...(options.filter ? { filter: options.filter } : {}),
       });
       return {
         count: result.count,
@@ -94,6 +107,7 @@ export function createHttpClient(): VectorizeClient {
           topK: options.topK,
           returnMetadata: options.returnMetadata,
           returnValues: options.returnValues,
+          ...(options.filter ? { filter: options.filter } : {}),
         }),
       });
 

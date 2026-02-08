@@ -25,6 +25,20 @@ const EMBEDDING_MODEL = "text-embedding-3-small";
 const VECTORIZE_TOP_K = 100;
 const MAX_DOCUMENTS = 30;
 
+/**
+ * Court-level relevance boost — higher courts get a score multiplier.
+ * Applied after Vectorize similarity search, before top-N selection.
+ * This ensures Supreme Court and Appeal decisions rank higher when
+ * scores are close, without completely overriding semantic relevance.
+ */
+const COURT_LEVEL_BOOST: Record<string, number> = {
+  supreme: 1.15,          // aad, supreme, jsc, rscc, clr, areiospagos
+  appeal: 1.10,           // courtOfAppeal, administrativeCourtOfAppeal
+  first_instance: 1.0,    // apofaseised, juvenileCourt
+  administrative: 1.0,    // administrative, administrativeIP
+  other: 1.0,             // epa, aap
+};
+
 /** Extract doc prefix from vector ID: "doc_id::chunk_N" → "doc_id" */
 function extractDocPrefix(vectorId: string): string {
   const sep = vectorId.lastIndexOf("::");
@@ -38,7 +52,7 @@ function extractDocPrefix(vectorId: string): string {
 export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
   return async (
     query: string,
-    _court?: string,
+    courtLevel?: string,
     yearFrom?: number,
     yearTo?: number,
   ): Promise<SearchResult[]> => {
@@ -58,10 +72,13 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
       const queryVector = embeddingResponse.data[0].embedding;
 
       // 2. Query Vectorize (no metadata → allows topK up to 100)
+      //    Apply court_level filter if provided (uses Vectorize metadata index)
+      const filter = courtLevel ? { court_level: courtLevel } : undefined;
       const results = await client.query(queryVector, {
         topK: VECTORIZE_TOP_K,
         returnMetadata: "none",
         returnValues: false,
+        filter,
       });
 
       if (!results.matches || results.matches.length === 0) {
@@ -105,7 +122,17 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
         }
       }
 
-      // 6. Apply year filtering if yearFrom/yearTo provided
+      // 6. Apply court-level boost — higher courts get a score multiplier
+      for (const [, doc] of sortedDocs) {
+        const meta = metaLookup.get(doc.representativeId);
+        const courtLevel = meta?.court_level ?? "";
+        const boost = COURT_LEVEL_BOOST[courtLevel] ?? 1.0;
+        doc.score *= boost;
+      }
+      // Re-sort after boost
+      sortedDocs.sort((a, b) => b[1].score - a[1].score);
+
+      // 7. Apply year filtering if yearFrom/yearTo provided (after boost)
       let filteredDocs = sortedDocs;
       if (yearFrom || yearTo) {
         filteredDocs = sortedDocs.filter(([, doc]) => {
@@ -126,12 +153,13 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
         }));
       }
 
-      // 7. Take top MAX_DOCUMENTS from filtered set
+      // 8. Take top MAX_DOCUMENTS from filtered set
       const topDocs = filteredDocs.slice(0, MAX_DOCUMENTS);
 
       console.log(JSON.stringify({
         event: "vectorize_search",
         query: query.slice(0, 200),
+        courtLevel: courtLevel ?? null,
         yearFrom,
         yearTo,
         chunksMatched: results.matches.length,
@@ -141,7 +169,7 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
         topScore: topDocs[0]?.[1]?.score ?? 0,
       }));
 
-      // 8. Return as SearchResult (metadata only, no full text)
+      // 9. Return as SearchResult (metadata only, no full text)
       return topDocs.map(([, doc]) => {
         const meta = metaLookup.get(doc.representativeId) ?? {};
         return {

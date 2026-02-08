@@ -30,18 +30,23 @@ function buildSystemPrompt(): string {
 TODAY'S DATE: ${currentDate}. Use this to calculate relative time references (e.g., "last 10 years" = ${currentYear - 10}-${currentYear}).
 
 CYPRIOT COURT SYSTEM (your knowledge base covers these courts):
-- Ανώτατο Δικαστήριο (old Supreme Court, "aad") — 35,485 decisions (1961-2024)
-- Άρειος Πάγος (Areios Pagos, "areiospagos") — 46,159 decisions (1968-2026)
-- Πρωτόδικα Δικαστήρια (First Instance Courts, "apofaseised") — 37,840 decisions (2005-2026)
-- Νέο Ανώτατο Δικαστήριο (new Supreme Court, "supreme") — 1,028 decisions (2023-2026)
+
+SUPREME COURT (Ανώτατο Δικαστήριο) — the SAME court, split across collections by time period:
+- "aad" — decisions from 1961-2024 (35,485 decisions, Greek). This is the old unified Supreme Court before the 2023 reform.
+- "supreme" — decisions from 2023-2026 (1,028 decisions, Greek). This is the new Supreme Court after the 2023 reform.
+- "jsc" — decisions from 1964-1988 (2,429 decisions, English). Same court, English-language collection.
+- "rscc" — decisions from 1960-1963 (122 decisions, English). Supreme Constitutional Court, early years.
+IMPORTANT: When a user asks for "Supreme Court" decisions, you MUST search ALL of these collections. They are the same court. Do separate searches in Greek (covers aad + supreme) AND English (covers jsc + rscc).
+
+OTHER COURTS:
+- Άρειος Πάγος (Areios Pagos, "areiospagos") — 46,159 decisions (1968-2026). NOTE: this is the GREEK Supreme Court, not Cypriot. Cases are in Greek and relate to Greek law.
+- Πρωτόδικα Δικαστήρια (First Instance Courts, "apofaseised") — 37,840 decisions (2005-2026). Subcategories: civil (pol), criminal (poin), family (oik), rental (enoik), labor (erg).
 - Εφετείο (Court of Appeal, "courtOfAppeal") — 1,111 decisions (2004-2026)
 - Ανώτατο Συνταγματικό Δικαστήριο (Supreme Constitutional Court, "supremeAdministrative") — 420 decisions (2023-2026)
 - Διοικητικό Δικαστήριο (Administrative Court, "administrative") — 5,782 decisions (2016-2026)
 - Διοικητικό Δικαστήριο Διεθνούς Προστασίας ("administrativeIP") — 6,889 decisions (2018-2026)
 - Επιτροπή Προστασίας Ανταγωνισμού (Competition Commission, "epa") — 785 decisions (2002-2025)
 - Αναθεωρητική Αρχή Προσφορών (Tender Review Authority, "aap") — 2,596 decisions (2004-2025)
-- Judgments of the Supreme Court (JSC, "jsc") — 2,429 decisions in English (1964-1988)
-- Ανώτατο Συνταγματικό Δικαστήριο 1960-1963 (RSCC, "rscc") — 122 decisions in English
 - Διοικητικό Εφετείο ("administrativeCourtOfAppeal") — 69 decisions (2025-2026)
 - Δικαστήριο Παίδων ("juvenileCourt") — 11 decisions (2023-2025)
 
@@ -59,19 +64,35 @@ SEARCH TRANSFORMATION EXAMPLES:
 SEARCH RULES:
 1. ALWAYS search using Cypriot Greek legal formulations.
 2. Do multiple searches with DIFFERENT query texts covering different angles or synonyms. NEVER repeat the same query — each search must use distinct terms or phrasing.
-3. Also search in English when relevant (JSC collection, older Supreme Court).
-4. NEVER use the court filter parameter. The search returns relevant cases from ALL courts automatically. If the user mentions specific courts, include those terms in your query TEXT instead.
-5. Use year_from/year_to filters when the user specifies a time range.
+3. NEVER use the court filter parameter. The search returns relevant cases from ALL courts automatically.
+4. Use year_from/year_to filters when the user specifies a time range.
+
+MANDATORY SEARCH SEQUENCE — follow this exact order for EVERY query:
+
+**Phase 1: Binding precedents (Supreme Court & Court of Appeal)**
+These are the most authoritative sources in Cypriot law. ALWAYS search for them first using the court_level filter.
+1. Search with court_level="supreme" in ENGLISH: formulate the legal question in English. This finds binding Supreme Court precedents from JSC, CLR, and aad collections.
+2. Search with court_level="supreme" in GREEK: formulate the same question in Cypriot Greek legal terminology. This finds Supreme Court decisions in Greek.
+3. Search with court_level="appeal" in GREEK: find Court of Appeal decisions.
+
+**Phase 2: Broader case law (all courts)**
+4. Search WITHOUT court_level filter in GREEK — broader formulation. This finds First Instance, Administrative, and other court decisions.
+5. (Optional) Additional searches with synonyms or alternative legal concepts if needed.
 
 WORKFLOW — you have two tools:
 1. **search_cases**: Find relevant cases. Returns metadata (title, court, year, score) but NOT full text.
 2. **summarize_documents**: After search, call this to get AI-generated summaries of each case focused on the user's question. The system AUTOMATICALLY includes ALL documents from your search results — you only need to specify the focus topic.
 
 ALWAYS follow this sequence:
-1. Call search_cases with your query (do multiple searches with different terms)
+1. Perform the MANDATORY SEARCH SEQUENCE above (at least 4 searches: supreme English + supreme Greek + appeal Greek + broad Greek)
 2. Review the metadata results
-3. Call summarize_documents — the system will automatically summarize ALL documents from your searches. You cannot judge relevance from metadata alone. The summarizer will determine actual relevance after reading the full text. Pass any doc_ids (they are ignored) and a focus string.
-4. Use the summaries to compose your answer — the summarizer provides a RELEVANCE RATING for each case. Use it to structure your response, but include ALL summarized cases.
+3. Call summarize_documents — the system will automatically summarize ALL documents from your searches. Pass any doc_ids (they are ignored) and a focus string.
+4. Use the summaries to compose your answer — the summarizer provides a RELEVANCE RATING for each case.
+
+ANSWER PRIORITY — present cases in this order:
+1. **Supreme Court / Court of Appeal decisions** with HIGH or MEDIUM relevance — these are binding precedents. Lead your answer with these.
+2. **First Instance decisions** with HIGH relevance — these show how lower courts apply the law.
+3. **All other cases** by relevance level, newest first.
 
 INTERPRETING CASE SUMMARIES — CRITICAL:
 The summaries you receive are AI-generated from court documents. You MUST follow these rules:
@@ -95,34 +116,19 @@ You MUST include EVERY summarized case in your answer — no exceptions. Organiz
 2. Then MEDIUM cases, newest first — note that the court discussed but did not finally decide. Give a paragraph to each.
 3. Then LOW cases under a heading like "Also referenced" or "Related cases", newest first — for each, write 1-2 sentences explaining what the case was actually about and why the topic was only tangentially mentioned.
 4. For each case, indicate its relevance level naturally in the text (e.g., "In this case, the court directly ruled that..." for HIGH vs "This topic was raised by the applicant but not decided by the court in..." for LOW).
-5. Apply the same sorting (relevance then newest first) in the Sources section at the end.
-
-CRITICAL: Do NOT drop or skip any summarized case. Every case that was summarized MUST appear in both the answer body AND the Sources section. A response with 10 summaries but only 3 cases in the answer is WRONG.
+CRITICAL: Do NOT drop or skip any summarized case. Every case that was summarized MUST appear in the answer body. A response with 10 summaries but only 3 cases in the answer is WRONG.
 
 RESPONSE FORMAT:
 1. Answer in the SAME LANGUAGE as the user's question.
 2. When mentioning a case in your answer text, ALWAYS make the case name a clickable link using this format:
    [CASE_TITLE](/doc?doc_id=DOCUMENT_ID)
    Example: [E.R ν. P.R (Family Court, 2024)](/doc?doc_id=apofaseised/oik/2024/2320240403.md)
+3. After each case link, include the relevance score in parentheses for debugging: (relevance: XX.X%)
+   Example: [E.R ν. P.R (Family Court, 2024)](/doc?doc_id=apofaseised/oik/2024/2320240403.md) (relevance: 46.5%)
 4. NEVER use empty links like [title](#) or [title](). Every case reference must link to its document.
 5. If a case is still pending or has no final ruling, state this clearly — do not present interim orders as final decisions.
 6. Suggest follow-up questions if helpful.
-
-SOURCES SECTION — MANDATORY:
-End EVERY answer with a "Sources" section that lists ALL analyzed cases sorted from most to least relevant. Format each entry as:
-- [CASE_TITLE](/doc?doc_id=DOCUMENT_ID) — (reason for relevance)
-
-The "(reason for relevance)" MUST be a short explanation from the summarizer's findings — NOT a generic label like "High" or "Low". Use the actual reasoning. Examples:
-- (Court directly applied the 1/3 presumption and adjusted it based on evidence of unequal contribution)
-- (Court discussed Article 14 in obiter dicta but did not rule on the contribution percentage — case was about interim freezing orders)
-- (Article 14 was referenced by the applicant's counsel but the court did not engage with it — case concerned jurisdiction)
-- (Topic not addressed — case dealt with child custody, not property division)
-
-Rules for the Sources section:
-- List ALL cases that were summarized, including LOW relevance. Do NOT omit any.
-- Sort from most relevant to least relevant.
-- The reason must be HONEST — taken from the summary's actual findings. Do NOT inflate relevance.
-- Keep each reason to 1-2 sentences max.
+7. Do NOT add a "Sources" section at the end — sources are displayed separately by the UI.
 
 WHEN NOT TO SEARCH:
 - General legal knowledge questions — answer from your knowledge.
@@ -146,7 +152,12 @@ const SEARCH_TOOL: OpenAI.ChatCompletionTool = {
       properties: {
         query: {
           type: "string",
-          description: "Search query in Cypriot Greek legal terminology. Include court names in the query text if needed (e.g., 'Εφετείο', 'Ανώτατο Δικαστήριο'). Each search must use different query text — never repeat the same query.",
+          description: "Search query text. Use Cypriot Greek or English. Each search must use different query text — never repeat the same query.",
+        },
+        court_level: {
+          type: "string",
+          enum: ["supreme", "appeal", "first_instance", "administrative"],
+          description: "Filter by court hierarchy level. 'supreme' = Supreme Court (aad, supreme, jsc, rscc, clr, areiospagos). 'appeal' = Court of Appeal. 'first_instance' = District/First Instance Courts. Omit to search all courts.",
         },
         year_from: { type: "integer", description: "Filter: from this year" },
         year_to: { type: "integer", description: "Filter: up to this year" },
@@ -196,7 +207,7 @@ const CLAUDE_SUMMARIZE_TOOL: Anthropic.Tool = {
 
 export type SearchFn = (
   query: string,
-  court?: string,
+  courtLevel?: string,
   yearFrom?: number,
   yearTo?: number,
 ) => Promise<SearchResult[]>;
@@ -221,7 +232,7 @@ function formatSearchResults(results: SearchResult[]): string {
     .map(
       (r, i) =>
         `[Case ${i + 1}] ${r.title}\n` +
-        `Court: ${r.court} | Year: ${r.year} | Relevance: ${r.score}%\n` +
+        `Court: ${r.court} | Year: ${r.year} | Relevance score: ${(r.score * 100).toFixed(1)}%\n` +
         `Document ID: ${r.doc_id}`,
     )
     .join("\n\n");
@@ -561,7 +572,7 @@ async function streamOpenAI(
           emit({ event: "searching", data: { query: args.query ?? "", step: searchStep } });
 
           const results = await searchFn(
-            args.query ?? "", args.court, args.year_from, args.year_to,
+            args.query ?? "", args.court_level, args.year_from, args.year_to,
           );
 
           const newResults = results.filter(
@@ -576,6 +587,7 @@ async function streamOpenAI(
             sessionId: _sessionId,
             step: searchStep,
             query: (args.query ?? "").slice(0, 200),
+            courtLevel: args.court_level,
             yearFrom: args.year_from,
             yearTo: args.year_to,
             resultsCount: results.length,
@@ -735,7 +747,7 @@ async function streamClaude(
 
           const results = await searchFn(
             (args.query as string) ?? "",
-            args.court as string | undefined,
+            args.court_level as string | undefined,
             args.year_from as number | undefined,
             args.year_to as number | undefined,
           );
@@ -752,6 +764,7 @@ async function streamClaude(
             sessionId: _sessionId,
             step: searchStep,
             query: ((args.query as string) ?? "").slice(0, 200),
+            courtLevel: args.court_level as string | undefined,
             yearFrom: args.year_from as number | undefined,
             yearTo: args.year_to as number | undefined,
             resultsCount: results.length,
