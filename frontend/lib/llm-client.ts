@@ -1,22 +1,39 @@
 /**
- * Agentic LLM client with multi-agent summarization.
+ * Agentic LLM client with summarize-first pipeline.
  *
  * Flow:
- *   1. Main LLM calls search_cases → gets document metadata (no full text)
- *   2. Main LLM calls summarize_documents → parallel GPT-4o-mini summarizes each doc
- *   3. Main LLM composes final answer from summaries
+ *   1. Main LLM calls search_cases → retriever finds docs → summarizer reads each → returns summaries
+ *   2. Main LLM receives pre-summarized results (NONE filtered out) and composes answer
  *
- * This avoids context overflow and is ~6x cheaper than sending full docs.
+ * Each search_cases call triggers inline summarization — no separate summarize step.
+ * Documents are deduplicated across searches. Court-level boost applied to ordering.
  */
 
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import type { ChatMessage, ModelConfig, SearchResult, UsageData } from "./types";
-import { MODELS } from "./types";
+import { MODELS, COURT_NAMES } from "./types";
 
-const MAX_TOOL_ROUNDS = 7;
+const MAX_TOOL_ROUNDS = 5;
 const SUMMARIZER_MODEL = "gpt-4o";
 const SUMMARIZER_MAX_TOKENS = 2000;
+
+// Court-level ordering for result sorting (lower = higher priority)
+const COURT_LEVEL_ORDER: Record<string, number> = {
+  supreme: 0,
+  appeal: 1,
+  first_instance: 2,
+  administrative: 3,
+  other: 4,
+};
+
+// Relevance ordering (lower = higher priority)
+const RELEVANCE_ORDER: Record<string, number> = {
+  HIGH: 0,
+  MEDIUM: 1,
+  LOW: 2,
+  NONE: 3,
+};
 
 // ── System Prompt ──────────────────────────────────────
 
@@ -58,67 +75,55 @@ SEARCH TRANSFORMATION EXAMPLES:
 
 SEARCH RULES:
 1. ALWAYS search using Cypriot Greek legal formulations.
-2. Do multiple searches with DIFFERENT query texts covering different angles or synonyms. NEVER repeat the same query — each search must use distinct terms or phrasing.
+2. Do exactly 3 searches with DIFFERENT query texts covering different angles or synonyms. NEVER repeat the same query.
 3. Also search in English when relevant (JSC collection, older Supreme Court).
-4. NEVER use the court filter parameter. The search returns relevant cases from ALL courts automatically. If the user mentions specific courts, include those terms in your query TEXT instead.
-5. Use year_from/year_to filters when the user specifies a time range.
+4. Use year_from/year_to filters when the user specifies a time range.
 
-WORKFLOW — you have two tools:
-1. **search_cases**: Find relevant cases. Returns metadata (title, court, year, score) but NOT full text.
-2. **summarize_documents**: After search, call this to get AI-generated summaries of each case focused on the user's question. The system AUTOMATICALLY includes ALL documents from your search results — you only need to specify the focus topic.
+WORKFLOW — you have one tool:
+**search_cases**: Search and analyze court cases. Each call automatically:
+1. Searches the vector database for relevant cases
+2. Reads the full text of each found case
+3. Analyzes each case with a specialized AI agent
+4. Returns only the relevant cases with AI-generated summaries
+
+The summaries include a RELEVANCE RATING (HIGH/MEDIUM/LOW) and engagement level. Cases rated NONE are automatically filtered out.
 
 ALWAYS follow this sequence:
-1. Call search_cases with your query (do multiple searches with different terms)
-2. Review the metadata results
-3. Call summarize_documents — the system will automatically summarize ALL documents from your searches. Pass any doc_ids (they are ignored) and a focus string.
-4. Use the summaries to compose your answer — the summarizer provides a RELEVANCE RATING for each case. Use it to structure your response, but include ALL summarized cases.
+1. Call search_cases 3 times with different query texts
+2. Review the summaries — they contain the court's actual analysis, not just metadata
+3. Compose your answer using the summaries
 
 INTERPRETING CASE SUMMARIES — CRITICAL:
 The summaries you receive are AI-generated from court documents. You MUST follow these rules:
-1. Each summary contains a RELEVANCE RATING (HIGH/MEDIUM/LOW/NONE) and an engagement level (RULED/DISCUSSED/MENTIONED/NOT ADDRESSED). Use them to STRUCTURE your answer:
+1. Each summary contains a RELEVANCE RATING (HIGH/MEDIUM/LOW) and an engagement level (RULED/DISCUSSED/MENTIONED). Use them to STRUCTURE your answer:
    - HIGH (court RULED): Lead your answer with these. Describe the court's ruling in detail.
-   - MEDIUM (court DISCUSSED): These are highly valuable — the court substantively engaged with the topic (analyzed arguments, referenced legal frameworks, weighed evidence) even though it did not reach a final conclusion. Present these prominently after HIGH cases. Describe WHAT the court analyzed, what arguments were considered, and WHY a conclusion was not reached. Do NOT dismiss these as irrelevant — a court's detailed analysis without a final ruling is often more informative for legal research than a brief ruling.
+   - MEDIUM (court DISCUSSED): Present these prominently after HIGH cases. Describe WHAT the court analyzed, what arguments were considered, and WHY a conclusion was not reached.
    - LOW (only MENTIONED): Include in a "Related cases" section. Briefly note what the case was about and how the topic was mentioned.
-   - NONE: Skip entirely.
 2. For engagement levels in each summary:
    - RULED: You may describe the court's ruling using "the court held/decided/ruled".
-   - DISCUSSED: You may describe the court's analysis using "the court considered/examined/analyzed" but MUST NOT say "the court held/decided/ruled". Clearly state the conclusion was not reached.
+   - DISCUSSED: You may describe the court's analysis using "the court considered/examined/analyzed" but MUST NOT say "the court held/decided/ruled".
    - MENTIONED: You MUST NOT say the court engaged with the topic — only "the topic was referenced/mentioned".
-   - NOT ADDRESSED: Do NOT claim the case addresses the topic.
 3. NEVER fabricate court holdings. If the summary says the court "did not decide" or "did not address" a topic, you MUST NOT present the case as if the court decided it.
 4. Distinguish interim decisions from final decisions. An interim freezing order is NOT a ruling on property division.
-5. If none of the summarized cases have HIGH relevance, say so honestly, then present MEDIUM and LOW cases: "The search did not return cases where the court directly ruled on this question. However, the following cases contain substantive analysis that is relevant to the research:..."
+5. If none of the summarized cases have HIGH relevance, say so honestly, then present MEDIUM and LOW cases.
 
 RESPONSE STRUCTURE:
 You MUST include EVERY summarized case in your answer — no exceptions. Organize by relevance first, then by year (newest first) within each level:
-1. Start with HIGH cases, newest first — these form the core of your answer. Discuss each in detail.
-2. Then MEDIUM cases, newest first — note that the court discussed but did not finally decide. Give a paragraph to each.
-3. Then LOW cases under a heading like "Also referenced" or "Related cases", newest first — for each, write 1-2 sentences explaining what the case was actually about and why the topic was only tangentially mentioned.
-4. For each case, indicate its relevance level naturally in the text (e.g., "In this case, the court directly ruled that..." for HIGH vs "This topic was raised by the applicant but not decided by the court in..." for LOW).
-5. Apply the same sorting (relevance then newest first) in the Sources section at the end.
+1. Start with HIGH cases from Supreme Court / Court of Appeal (binding precedents), then HIGH from other courts.
+2. Then MEDIUM cases, newest first.
+3. Then LOW cases under "Related cases", newest first.
+4. For each case, indicate its relevance level naturally in the text.
+5. Apply the same sorting in the Sources section at the end.
 
-CRITICAL: Do NOT drop or skip any summarized case. Every case that was summarized MUST appear in both the answer body AND the Sources section. A response with 10 summaries but only 3 cases in the answer is WRONG.
+CRITICAL: Do NOT drop or skip any summarized case. Every case that was summarized MUST appear in the answer body.
 
 RESPONSE FORMAT:
 1. Answer in the SAME LANGUAGE as the user's question.
-2. When mentioning a case in your answer text, ALWAYS make the case name a clickable link using this format:
-   [CASE_TITLE](/doc?doc_id=DOCUMENT_ID)
-   Example: [E.R ν. P.R (Family Court, 2024)](/doc?doc_id=apofaseised/oik/2024/2320240403.md)
-4. NEVER use empty links like [title](#) or [title](). Every case reference must link to its document.
-5. If a case is still pending or has no final ruling, state this clearly — do not present interim orders as final decisions.
-6. Suggest follow-up questions if helpful.
-
-SOURCES SECTION — MANDATORY:
-End EVERY answer with a "Sources" section that lists ALL analyzed cases sorted from most to least relevant. Format each entry as:
-- [CASE_TITLE](/doc?doc_id=DOCUMENT_ID) — (reason for relevance)
-
-The "(reason for relevance)" MUST be a short explanation from the summarizer's findings — NOT a generic label like "High" or "Low". Use the actual reasoning.
-
-Rules for the Sources section:
-- List ALL cases that were summarized, including LOW relevance. Do NOT omit any.
-- Sort from most relevant to least relevant.
-- The reason must be HONEST — taken from the summary's actual findings. Do NOT inflate relevance.
-- Keep each reason to 1-2 sentences max.
+2. When mentioning a case in your answer text, ALWAYS make the case name a clickable link: [CASE_TITLE](/doc?doc_id=DOCUMENT_ID)
+3. NEVER use empty links like [title](#) or [title]().
+4. If a case is still pending or has no final ruling, state this clearly.
+5. Do NOT add a "Sources" section at the end — sources are displayed separately by the UI.
+6. Do NOT add concluding paragraphs summarizing or restating what was already said. End with the last case discussion.
 
 WHEN NOT TO SEARCH:
 - General legal knowledge questions — answer from your knowledge.
@@ -129,20 +134,20 @@ const TRANSLATE_SUFFIX = `
 
 IMPORTANT: Write your ENTIRE answer in English. Translate all Greek case excerpts to English. Keep original Greek case titles in parentheses.`;
 
-// ── Tool Definitions ───────────────────────────────────
+// ── Tool Definition ────────────────────────────────────
 
 const SEARCH_TOOL: OpenAI.ChatCompletionTool = {
   type: "function",
   function: {
     name: "search_cases",
     description:
-      "Search the Cypriot court case database. Returns case metadata (title, court, year, relevance score) but NOT full text. After reviewing results, use summarize_documents to read the actual cases.",
+      "Search and analyze Cypriot court cases. Automatically searches the database, reads full texts, and returns AI-generated summaries with relevance ratings. Cases rated NONE are filtered out. Do 3 searches with different query texts.",
     parameters: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "Search query in Cypriot Greek legal terminology. Include court names in the query text if needed (e.g., 'Εφετείο', 'Ανώτατο Δικαστήριο'). Each search must use different query text — never repeat the same query.",
+          description: "Search query in Cypriot Greek or English legal terminology. Each search must use different query text — never repeat the same query.",
         },
         year_from: { type: "integer", description: "Filter: from this year" },
         year_to: { type: "integer", description: "Filter: up to this year" },
@@ -152,40 +157,10 @@ const SEARCH_TOOL: OpenAI.ChatCompletionTool = {
   },
 };
 
-const SUMMARIZE_TOOL: OpenAI.ChatCompletionTool = {
-  type: "function",
-  function: {
-    name: "summarize_documents",
-    description:
-      "Analyze and summarize ALL court case documents found by previous searches. The system will automatically include every document from search results — you do NOT need to list specific doc_ids. Just provide the focus topic.",
-    parameters: {
-      type: "object",
-      properties: {
-        doc_ids: {
-          type: "array",
-          items: { type: "string" },
-          description: "Ignored — system automatically uses all documents from search results. You may pass an empty array.",
-        },
-        focus: {
-          type: "string",
-          description: "What to focus on when summarizing — the legal issues, principles, or aspects relevant to the user's question.",
-        },
-      },
-      required: ["doc_ids", "focus"],
-    },
-  },
-};
-
 const CLAUDE_SEARCH_TOOL: Anthropic.Tool = {
   name: "search_cases",
   description: SEARCH_TOOL.function.description ?? "",
   input_schema: SEARCH_TOOL.function.parameters as Anthropic.Tool.InputSchema,
-};
-
-const CLAUDE_SUMMARIZE_TOOL: Anthropic.Tool = {
-  name: "summarize_documents",
-  description: SUMMARIZE_TOOL.function.description ?? "",
-  input_schema: SUMMARIZE_TOOL.function.parameters as Anthropic.Tool.InputSchema,
 };
 
 // ── Types ──────────────────────────────────────────────
@@ -204,23 +179,22 @@ interface SSEYield {
   data: unknown;
 }
 
+interface SummaryResult {
+  docId: string;
+  summary: string;
+  relevance: string; // HIGH, MEDIUM, LOW, NONE
+  courtLevel: string;
+  court: string;
+  year: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 // ── Utilities ──────────────────────────────────────────
 
 function getSystem(translate: boolean): string {
   const prompt = buildSystemPrompt();
   return translate ? prompt + TRANSLATE_SUFFIX : prompt;
-}
-
-function formatSearchResults(results: SearchResult[]): string {
-  if (results.length === 0) return "No results found for this query.";
-  return results
-    .map(
-      (r, i) =>
-        `[Case ${i + 1}] ${r.title}\n` +
-        `Court: ${r.court} | Year: ${r.year} | Relevance: ${r.score}%\n` +
-        `Document ID: ${r.doc_id}`,
-    )
-    .join("\n\n");
 }
 
 function calculateCost(
@@ -242,50 +216,88 @@ function formatApiError(err: unknown): string {
   return "An error occurred while processing your request. Please try again.";
 }
 
-// ── Sorting Helpers ────────────────────────────────────
-
-/**
- * Extract the year from a doc_id path like "apofaseised/oik/2024/2320240403.md"
- * or "aad/meros_1/2019/1-201903-E7-18PolEf.md". Falls back to 0 if not found.
- */
 function extractYearFromDocId(docId: string): number {
   const match = docId.match(/\/(\d{4})\//);
   return match ? parseInt(match[1], 10) : 0;
 }
 
-// ── Summarizer Agent ───────────────────────────────────
+/**
+ * Parse relevance rating from summary text.
+ */
+function parseRelevance(summary: string): string {
+  const section = summary.split(/RELEVANCE RATING/i)[1] ?? "";
+  for (const level of ["HIGH", "MEDIUM", "LOW", "NONE"]) {
+    if (new RegExp(`\\b${level}\\b`).test(section)) return level;
+  }
+  return "NONE";
+}
 
 /**
- * Extract the actual court decision text, stripping references and metadata.
- * Then smart-truncate if still too long: keep beginning + end (where ruling is).
+ * Detect court_level from court code.
  */
+function getCourtLevel(court: string): string {
+  const map: Record<string, string> = {
+    aad: "supreme", supreme: "supreme", supremeAdministrative: "supreme",
+    areiospagos: "supreme", jsc: "supreme", rscc: "supreme", clr: "supreme",
+    courtOfAppeal: "appeal", administrativeCourtOfAppeal: "appeal",
+    apofaseised: "first_instance", juvenileCourt: "first_instance",
+    administrative: "administrative", administrativeIP: "administrative",
+    epa: "other", aap: "other",
+  };
+  return map[court] ?? "other";
+}
+
+/**
+ * Format summaries for LLM consumption — sorted by court level, relevance, year.
+ */
+function formatSummariesForLLM(results: SummaryResult[]): string {
+  if (results.length === 0) return "No relevant results found for this query.";
+
+  // Sort: court_level → relevance → year descending
+  const sorted = [...results].sort((a, b) => {
+    const levelA = COURT_LEVEL_ORDER[a.courtLevel] ?? 4;
+    const levelB = COURT_LEVEL_ORDER[b.courtLevel] ?? 4;
+    if (levelA !== levelB) return levelA - levelB;
+    const relA = RELEVANCE_ORDER[a.relevance] ?? 3;
+    const relB = RELEVANCE_ORDER[b.relevance] ?? 3;
+    if (relA !== relB) return relA - relB;
+    return b.year - a.year;
+  });
+
+  return sorted
+    .map((r, i) => {
+      const courtLabel = COURT_NAMES[r.court] ?? r.court;
+      return `══════════════════════════════════════════\n` +
+        `[Case ${i + 1}] ${courtLabel} | ${r.year} | Relevance: ${r.relevance}\n` +
+        `Document ID: ${r.docId}\n` +
+        `══════════════════════════════════════════\n\n` +
+        r.summary;
+    })
+    .join("\n\n");
+}
+
+// ── Summarizer Agent ───────────────────────────────────
+
 function extractDecisionText(text: string, maxChars: number): string {
-  // Find "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ:" marker — everything after it is the decision
   const decisionMarker = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ:";
   const markerIdx = text.indexOf(decisionMarker);
 
   let decisionText: string;
   let title = "";
 
-  // Extract title (first line)
   const firstNewline = text.indexOf("\n");
   if (firstNewline > 0) {
     title = text.slice(0, firstNewline).trim() + "\n\n";
   }
 
   if (markerIdx !== -1) {
-    // Found marker — take title + everything after the marker
     decisionText = title + text.slice(markerIdx + decisionMarker.length).trim();
   } else {
-    // No marker (e.g. Areios Pagos) — use full text
     decisionText = text;
   }
 
-  // If it fits, return as-is
   if (decisionText.length <= maxChars) return decisionText;
 
-  // Still too long — keep beginning (facts/parties) + end (ruling/conclusion)
-  // Give MORE to the tail because the court's actual ruling is always at the end
   const headSize = Math.floor(maxChars * 0.35);
   const tailSize = maxChars - headSize - 200;
 
@@ -300,7 +312,11 @@ async function summarizeDocument(
   fullText: string,
   focus: string,
   userQuery: string,
-): Promise<{ docId: string; summary: string; inputTokens: number; outputTokens: number }> {
+): Promise<SummaryResult> {
+  const court = docId.split("/")[0] === "apofaseis"
+    ? docId.split("/")[1] ?? "unknown"
+    : docId.split("/")[0] ?? "unknown";
+
   const systemPrompt = `You are a legal analyst summarizing a Cypriot court decision for a lawyer's research.
 
 The lawyer's research question: "${userQuery}"
@@ -311,35 +327,27 @@ Summarize this court decision in 400-700 words:
 1. CASE HEADER: Parties, court, date, case number (2 lines max)
 2. STATUS: Final decision (ΑΠΟΦΑΣΗ) or interim (ΕΝΔΙΑΜΕΣΗ ΑΠΟΦΑΣΗ)?
 3. FACTS: Brief background — what happened, who sued whom, what was claimed (3-4 sentences)
-4. WHAT THE CASE IS ACTUALLY ABOUT: In 1-2 sentences, state the core legal issue the court decided (e.g., "interim freezing order", "property division", "child custody"). This may differ from the research question.
+4. WHAT THE CASE IS ACTUALLY ABOUT: In 1-2 sentences, state the core legal issue the court decided.
 5. COURT'S FINDINGS on "${focus}":
-   Pick ONE engagement level that best describes the court's treatment of the topic:
-   - RULED: The court analyzed the topic and reached a conclusion or ruling. Note: issuing or refusing an interim order IS a ruling — the court decided to grant/deny the order based on its analysis, even if the underlying dispute remains open.
-   - DISCUSSED: The court substantively engaged with the topic — heard arguments from both sides, analyzed legal provisions, referenced case law or doctrine — but did NOT reach a conclusion on this specific point (e.g., reserved for trial, left open, found it premature to decide).
-   - MENTIONED: The topic was only briefly referenced by a party or the court in passing, without substantive analysis.
+   Pick ONE engagement level:
+   - RULED: The court analyzed the topic and reached a conclusion or ruling.
+   - DISCUSSED: The court substantively engaged with the topic but did NOT reach a conclusion.
+   - MENTIONED: The topic was only briefly referenced without substantive analysis.
    - NOT ADDRESSED: The topic does not appear in the decision.
    State the level, then:
    - If RULED: Quote the court's conclusion in original Greek + English translation.
-   - If DISCUSSED: Describe what the court analyzed. Quote the most relevant passage in Greek + English. Clearly state what was NOT decided.
-   - If MENTIONED: Note the reference briefly. State the court did NOT engage with it.
+   - If DISCUSSED: Describe what the court analyzed. Quote the most relevant passage.
+   - If MENTIONED: Note the reference briefly.
    - If NOT ADDRESSED: Write "NOT ADDRESSED."
-6. OUTCOME: What did the court order? (dismissed/succeeded/interim order/remanded)
-7. RELEVANCE RATING: Rate as HIGH / MEDIUM / LOW / NONE and explain in one sentence:
-   - HIGH: The court ruled on the research topic (level = RULED).
-   - MEDIUM: The court substantively discussed or analyzed the topic without reaching a final conclusion (level = DISCUSSED). This is still valuable for legal research — the court's reasoning, the arguments considered, and the legal framework referenced are informative even without a final ruling.
-   - LOW: The topic was only mentioned in passing without substantive analysis (level = MENTIONED).
-   - NONE: The topic does not appear in the decision (level = NOT ADDRESSED).
+6. OUTCOME: What did the court order?
+7. RELEVANCE RATING: Rate as HIGH / MEDIUM / LOW / NONE and explain in one sentence.
 
-CRITICAL RULES — VIOLATION IS UNACCEPTABLE:
-- ONLY state what is EXPLICITLY written in the text. If something is not stated, say "not addressed" or "not decided".
-- If the court says it has NOT decided an issue (e.g. "δεν κατέληξε", "δεν αποφασίστηκε"), you MUST report that the issue remains UNDECIDED. Do NOT present it as decided.
-- If this is an INTERIM decision (ενδιάμεση απόφαση, προσωρινό διάταγμα), state this clearly — interim orders are NOT final rulings on the merits.
-- NEVER assume or infer a court's conclusion. If the text says "the court could not conclude which law applies", your summary MUST say "the court did not reach a conclusion on applicable law".
-- NEVER say the court "applied" a principle when it only "mentioned" or "referenced" it. A party arguing something is NOT the court ruling on it.
-- Distinguish between what a PARTY ARGUED and what the COURT DECIDED. Parties' arguments are not court findings.
-- Pay special attention to the LAST section of the document (after "[... middle section omitted ...]" if present, or the section starting with ΚΑΤΑΛΗΞΗ) — this contains the actual ruling.
+CRITICAL RULES:
+- ONLY state what is EXPLICITLY written in the text.
+- NEVER assume or infer a court's conclusion.
+- Distinguish between what a PARTY ARGUED and what the COURT DECIDED.
 - Include at least one EXACT QUOTE from the decision (in Greek) with English translation.
-- A wrong summary is worse than no summary. When in doubt, quote the original text.
+- A wrong summary is worse than no summary.
 
 Document ID: ${docId}`;
 
@@ -353,15 +361,21 @@ Document ID: ${docId}`;
     max_tokens: SUMMARIZER_MAX_TOKENS,
   });
 
+  const summary = response.choices[0]?.message?.content ?? "[Summary unavailable]";
+
   return {
     docId,
-    summary: response.choices[0]?.message?.content ?? "[Summary unavailable]",
+    summary,
+    relevance: parseRelevance(summary),
+    courtLevel: getCourtLevel(court),
+    court,
+    year: extractYearFromDocId(docId),
     inputTokens: response.usage?.prompt_tokens ?? 0,
     outputTokens: response.usage?.completion_tokens ?? 0,
   };
 }
 
-// ── Fetch + Summarize handler ──────────────────────────
+// ── Search + Summarize Handler ─────────────────────────
 
 let _fetchDocumentFn: FetchDocumentFn | null = null;
 let _lastUserQuery = "";
@@ -379,82 +393,111 @@ export function setSessionId(id: string) {
   _sessionId = id;
 }
 
-async function handleSummarizeDocuments(
-  args: { doc_ids: string[]; focus: string },
+/**
+ * Search + summarize in one step.
+ * 1. Run Vectorize search
+ * 2. Deduplicate against already-summarized doc_ids
+ * 3. Fetch full text from R2
+ * 4. Summarize each document in parallel
+ * 5. Filter out NONE relevance
+ * 6. Sort by court level + relevance + year
+ * 7. Return formatted summaries to LLM
+ */
+async function handleSearchAndSummarize(
+  query: string,
+  yearFrom: number | undefined,
+  yearTo: number | undefined,
+  searchFn: SearchFn,
+  summarizedDocIds: Set<string>,
+  allSources: SearchResult[],
   emit: (event: SSEYield) => void,
-): Promise<{ text: string; inputTokens: number; outputTokens: number; docCount: number }> {
+): Promise<{
+  text: string;
+  results: SummaryResult[];
+  inputTokens: number;
+  outputTokens: number;
+}> {
   const fetchDoc = _fetchDocumentFn;
-  if (!fetchDoc) {
-    return { text: "Document fetching is not available.", inputTokens: 0, outputTokens: 0, docCount: 0 };
+
+  // 1. Vectorize search
+  const searchResults = await searchFn(query, undefined, yearFrom, yearTo);
+
+  // 2. Deduplicate — skip already-summarized docs
+  const newResults = searchResults.filter(
+    (r) => r.doc_id && !summarizedDocIds.has(r.doc_id),
+  );
+
+  // Add to allSources for UI display
+  for (const r of newResults) {
+    if (!allSources.some((s) => s.doc_id === r.doc_id)) {
+      allSources.push({ ...r, text: r.text.slice(0, 400) });
+    }
   }
 
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const docIds = args.doc_ids;
+  if (newResults.length === 0 || !fetchDoc) {
+    return { text: "No new results found for this query.", results: [], inputTokens: 0, outputTokens: 0 };
+  }
+
+  // Mark as summarized
+  for (const r of newResults) {
+    summarizedDocIds.add(r.doc_id);
+  }
 
   emit({
     event: "summarizing",
-    data: { count: docIds.length, focus: args.focus },
+    data: { count: newResults.length, focus: _lastUserQuery },
   });
 
-  // Fetch all documents in parallel
+  // 3. Fetch full texts in parallel
   const docTexts = await Promise.all(
-    docIds.map(async (id) => ({ id, text: await fetchDoc(id) })),
+    newResults.map(async (r) => ({ id: r.doc_id, text: await fetchDoc(r.doc_id) })),
   );
 
-  // Summarize all documents in parallel
+  // 4. Summarize in parallel
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const focus = _lastUserQuery;
   const summaryResults = await Promise.all(
     docTexts
       .filter((d) => d.text !== null)
-      .map((d) =>
-        summarizeDocument(client, d.id, d.text!, args.focus, _lastUserQuery),
-      ),
+      .map((d) => summarizeDocument(client, d.id, d.text!, focus, _lastUserQuery)),
   );
 
-  // Sort summaries by year descending (newest first) so the main LLM
-  // naturally presents them in chronological order without needing to re-sort.
-  const sortedResults = [...summaryResults].sort((a, b) => {
-    const yearA = extractYearFromDocId(a.docId);
-    const yearB = extractYearFromDocId(b.docId);
-    return yearB - yearA;
-  });
-
-  // Send individual summaries to the client for display in DocViewer
+  // Send summaries to UI for DocViewer
   emit({
     event: "summaries",
-    data: sortedResults.map((r) => ({ docId: r.docId, summary: r.summary })),
+    data: summaryResults.map((r) => ({ docId: r.docId, summary: r.summary })),
   });
 
+  // 5. Filter out NONE relevance
+  const relevant = summaryResults.filter((r) => r.relevance !== "NONE");
+
+  // Log
   let totalIn = 0;
   let totalOut = 0;
-  const parts: string[] = [];
-
-  for (const result of sortedResults) {
-    totalIn += result.inputTokens;
-    totalOut += result.outputTokens;
-    parts.push(
-      `══════════════════════════════════════════\n` +
-      `Document ID: ${result.docId}\n` +
-      `══════════════════════════════════════════\n\n` +
-      result.summary,
-    );
+  for (const r of summaryResults) {
+    totalIn += r.inputTokens;
+    totalOut += r.outputTokens;
   }
 
-  const summarizerCost = (totalIn / 1_000_000) * 2.5 + (totalOut / 1_000_000) * 10;
   console.log(JSON.stringify({
-    event: "summarize_complete",
+    event: "search_and_summarize",
     sessionId: _sessionId,
-    docsCount: summaryResults.length,
+    query: query.slice(0, 200),
+    yearFrom,
+    yearTo,
+    searched: searchResults.length,
+    newDocs: newResults.length,
+    summarized: summaryResults.length,
+    relevant: relevant.length,
+    filteredOut: summaryResults.length - relevant.length,
     inputTokens: totalIn,
     outputTokens: totalOut,
-    costUsd: parseFloat(summarizerCost.toFixed(4)),
   }));
 
-  return {
-    text: parts.join("\n\n"),
-    inputTokens: totalIn,
-    outputTokens: totalOut,
-    docCount: summaryResults.length,
-  };
+  // 6. Format for LLM (sorted by court level + relevance + year)
+  const text = formatSummariesForLLM(relevant);
+
+  return { text, results: summaryResults, inputTokens: totalIn, outputTokens: totalOut };
 }
 
 // ── Main Chat Stream ───────────────────────────────────
@@ -468,7 +511,6 @@ export function chatStream(
   const encoder = new TextEncoder();
   const modelCfg = MODELS[modelKey];
 
-  // Extract user query for summarizer context
   const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
   if (lastUserMsg) setLastUserQuery(lastUserMsg.content);
 
@@ -523,6 +565,7 @@ async function streamOpenAI(
   ];
 
   const allSources: SearchResult[] = [];
+  const summarizedDocIds = new Set<string>();
   let searchStep = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -534,7 +577,7 @@ async function streamOpenAI(
     const response = await client.chat.completions.create({
       model: modelCfg.modelId,
       messages: apiMessages,
-      tools: [SEARCH_TOOL, SUMMARIZE_TOOL],
+      tools: [SEARCH_TOOL],
       temperature: 0.1,
     });
 
@@ -556,42 +599,19 @@ async function streamOpenAI(
           searchStep++;
           emit({ event: "searching", data: { query: args.query ?? "", step: searchStep } });
 
-          const results = await searchFn(
-            args.query ?? "", args.court, args.year_from, args.year_to,
+          const result = await handleSearchAndSummarize(
+            args.query ?? "",
+            args.year_from,
+            args.year_to,
+            searchFn,
+            summarizedDocIds,
+            allSources,
+            emit,
           );
 
-          const newResults = results.filter(
-            (r) => r.doc_id && !allSources.some((s) => s.doc_id === r.doc_id),
-          );
-          for (const r of newResults) {
-            allSources.push({ ...r, text: r.text.slice(0, 400) });
-          }
-
-          console.log(JSON.stringify({
-            event: "search",
-            sessionId: _sessionId,
-            step: searchStep,
-            query: (args.query ?? "").slice(0, 200),
-            yearFrom: args.year_from,
-            yearTo: args.year_to,
-            resultsCount: results.length,
-            newUniqueCount: newResults.length,
-            totalSources: allSources.length,
-          }));
-
-          apiMessages.push({
-            role: "tool",
-            tool_call_id: toolCall.id,
-            content: formatSearchResults(results),
-          });
-        } else if (toolCall.function.name === "summarize_documents") {
-          // Override LLM's doc_id selection — always summarize ALL found documents
-          const allDocIds = allSources.map((s) => s.doc_id);
-          const overriddenArgs = { ...args, doc_ids: allDocIds };
-          const result = await handleSummarizeDocuments(overriddenArgs, emit);
           summarizerInputTokens += result.inputTokens;
           summarizerOutputTokens += result.outputTokens;
-          documentsAnalyzed += result.docCount;
+          documentsAnalyzed += result.results.length;
 
           apiMessages.push({
             role: "tool",
@@ -694,6 +714,7 @@ async function streamClaude(
   }));
 
   const allSources: SearchResult[] = [];
+  const summarizedDocIds = new Set<string>();
   let searchStep = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -707,7 +728,7 @@ async function streamClaude(
       max_tokens: 8192,
       system,
       messages: apiMessages,
-      tools: [CLAUDE_SEARCH_TOOL, CLAUDE_SUMMARIZE_TOOL],
+      tools: [CLAUDE_SEARCH_TOOL],
       temperature: 0.1,
     });
 
@@ -729,43 +750,19 @@ async function streamClaude(
           searchStep++;
           emit({ event: "searching", data: { query: (args.query as string) ?? "", step: searchStep } });
 
-          const results = await searchFn(
+          const result = await handleSearchAndSummarize(
             (args.query as string) ?? "",
-            args.court as string | undefined,
             args.year_from as number | undefined,
             args.year_to as number | undefined,
-          );
-
-          const newResults = results.filter(
-            (r) => r.doc_id && !allSources.some((s) => s.doc_id === r.doc_id),
-          );
-          for (const r of newResults) {
-            allSources.push({ ...r, text: r.text.slice(0, 400) });
-          }
-
-          console.log(JSON.stringify({
-            event: "search",
-            sessionId: _sessionId,
-            step: searchStep,
-            query: ((args.query as string) ?? "").slice(0, 200),
-            yearFrom: args.year_from as number | undefined,
-            yearTo: args.year_to as number | undefined,
-            resultsCount: results.length,
-            newUniqueCount: newResults.length,
-            totalSources: allSources.length,
-          }));
-
-          toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: formatSearchResults(results) });
-        } else if (toolUse.name === "summarize_documents") {
-          // Override LLM's doc_id selection — always summarize ALL found documents
-          const allDocIds = allSources.map((s) => s.doc_id);
-          const result = await handleSummarizeDocuments(
-            { doc_ids: allDocIds, focus: args.focus as string },
+            searchFn,
+            summarizedDocIds,
+            allSources,
             emit,
           );
+
           summarizerInputTokens += result.inputTokens;
           summarizerOutputTokens += result.outputTokens;
-          documentsAnalyzed += result.docCount;
+          documentsAnalyzed += result.results.length;
 
           toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result.text });
         }

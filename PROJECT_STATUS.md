@@ -10,32 +10,46 @@
 User -> Next.js (Cloudflare Worker) -> API Routes
             |
             +-- /api/chat (POST, SSE streaming)
-            |     Main LLM (GPT-4o / Claude) with two tools:
-            |       1. search_cases -> Cloudflare Vectorize (PRODUCTION)
-            |       2. summarize_documents -> R2 full text -> parallel GPT-4o agents
-            |     Structured JSON logging -> Workers Logs (Cloudflare Dashboard)
+            |     Main LLM (GPT-4o / Claude) — single tool: search_cases
+            |       search_cases = Vectorize search + R2 fetch + parallel GPT-4o summarization
+            |       Returns pre-summarized results (NONE filtered out)
+            |       Sorted by court level → relevance → year
+            |     Structured JSON logging -> Workers Logs
             |
             +-- /api/doc (GET)
                   Document viewer -> R2 bucket (149,886 .md files)
 ```
 
+### Summarize-First Pipeline (current)
+
+Each `search_cases` call does everything in one step:
+1. Vectorize semantic search → 30 unique docs
+2. Fetch full text from R2 for each doc
+3. Summarize each doc with GPT-4o (parallel)
+4. Parse relevance rating (HIGH/MEDIUM/LOW/NONE)
+5. Filter out NONE
+6. Sort by: court level (Supreme > Appeal > others) → relevance → year
+7. Return formatted summaries to main LLM
+
+LLM makes 3 search calls → each triggers ~30 summarizations → LLM receives only relevant summaries → composes answer. No separate `summarize_documents` tool.
+
+### Key Components
+
 - **Document storage**: Cloudflare R2 bucket `cyprus-case-law-docs` (149,886 parsed .md files)
-- **Document fetch in dev**: S3 HTTP API to real R2 (`r2FetchViaS3` in `frontend/app/api/chat/route.ts`)
+- **Document fetch in dev**: S3 HTTP API to real R2 (`r2FetchViaS3`)
 - **Document fetch in prod**: R2 Worker binding (`r2FetchViaBinding`)
-- **Vector search**: Cloudflare Vectorize index `cyprus-law-cases-search` (PRODUCTION)
-- **Search in dev**: Same Vectorize index via Cloudflare REST API (`frontend/lib/vectorize-client.ts`)
-- **Search in prod**: Vectorize Worker binding (zero-latency, no auth needed)
-- **Search abstraction**: `VectorizeClient` interface — single search codebase for dev and prod
+- **Vector search**: Cloudflare Vectorize index `cyprus-law-cases-search`
+- **Search in dev**: Vectorize REST API (`frontend/lib/vectorize-client.ts`)
+- **Search in prod**: Vectorize Worker binding (zero-latency)
 - **Observability**: Workers Logs with structured JSON logging, session tracking (`sessionId`)
 - **Auth**: Cloudflare Zero Trust (email OTP)
 
 ### PRODUCTION WARNING — Vectorize Index
 
 > **Index name:** `cyprus-law-cases-search`
-> **Status:** PRODUCTION — contains ~2.27M vectors from all 15 courts
-> **DO NOT** delete, drop, or recreate this index.
-> Recreating requires re-running the batch embedding pipeline (~$15 OpenAI cost, ~40 min).
-> Old index `cylaw-search` is deprecated (stuck mutation queue, no metadata indexes).
+> **Status:** PRODUCTION — 2,269,131 vectors from all 15 courts
+> **DO NOT** delete, drop, or recreate.
+> Old index `cylaw-search` is deprecated (stuck mutation queue).
 
 ### Vectorize Index Details
 
@@ -45,11 +59,9 @@ User -> Next.js (Cloudflare Worker) -> API Routes
 | Dimensions | 1536 |
 | Metric | cosine |
 | Embedding model | OpenAI `text-embedding-3-small` |
-| Total vectors | ~2,269,231 (all 15 courts, all chunks) |
-| Vector ID format | `{doc_id}::{chunk_index}` (hashed via MD5 if >64 bytes) |
+| Total vectors | 2,269,131 |
 | Metadata fields | `doc_id`, `court`, `year`, `title`, `chunk_index`, `court_level`, `subcourt` |
-| Metadata indexes | `year` (string), `court` (string), `court_level` (string), `subcourt` (string) |
-| Created | 2026-02-08 |
+| Metadata indexes | `year`, `court`, `court_level`, `subcourt` (all string) |
 
 ### Metadata Index Values
 
@@ -65,130 +77,132 @@ User -> Next.js (Cloudflare Worker) -> API Routes
 
 ## What Works Now
 
-- **Chat UI** — Perplexity-style, SSE streaming, multi-model (GPT-4o, o3-mini, Claude Sonnet 4) — `frontend/app/page.tsx`
-- **Multi-agent summarizer** — parallel GPT-4o agents analyze ALL found documents (no limit) — `frontend/lib/llm-client.ts`
-- **Auto-summarization** — LLM's doc_id selection overridden; system always summarizes ALL documents from search results
-- **Document viewer** — click any case to read full text with AI summary panel — `frontend/app/api/doc/route.ts`
-- **R2 integration** — all 149,886 docs in R2, fetched in both dev (S3 API) and prod (binding)
-- **Vectorize search** — unified client for dev (REST API) and prod (binding), up to 30 unique docs per search, year filtering, court_level filtering — `frontend/lib/retriever.ts`
-- **Metadata filtering** — Vectorize indexes for `year`, `court`, `court_level`, `subcourt` — all populated and working
-- **Court-level prioritization** — `search_cases` tool accepts `court_level` param, LLM does mandatory searches: supreme (English + Greek) → appeal → broad
-- **Score boost** — Supreme Court ×1.15, Appeal ×1.10 score multiplier in retriever
-- **Sources UI** — expandable source cards with inline AI summary, sorted by relevance then year — `frontend/components/SourceCard.tsx`
-- **Structured logging** — JSON logs with sessionId, search queries, costs, errors → Cloudflare Workers Logs
-- **Test suite** — `npm test` runs typecheck + lint + search regression (14 assertions) + summarizer eval (28 assertions)
-- **Pre-commit hook** — TypeScript + ESLint check on every commit — `.githooks/pre-commit`
-- **Data pipeline** — scrape, download, parse, chunk, embed for all 15 courts — `scraper/`, `rag/`, `scripts/`
-- **Cost tracking** — per-request token/cost display in UI — `frontend/components/ChatArea.tsx`
+- **Summarize-first pipeline** — each search_cases call searches + summarizes + filters in one step — `frontend/lib/llm-client.ts`
+- **Chat UI** — Perplexity-style, SSE streaming, multi-model (GPT-4o, o3-mini, Claude Sonnet 4)
+- **Sources UI** — expandable source cards with inline AI summary, relevance badges, sorted by court level + relevance + year
+- **Document viewer** — click any case to read full text with AI summary panel
+- **Deduplication** — doc_ids tracked across searches; second search skips already-summarized docs
+- **Court-level sorting** — Supreme Court results sorted above Appeal above First Instance in LLM output
+- **NONE filtering** — irrelevant cases filtered before reaching LLM
+- **Year filtering** — applied in retriever when LLM passes year_from/year_to
+- **Structured logging** — JSON logs with sessionId tracking → Cloudflare Workers Logs
+- **Test suite** — fast (typecheck+lint), integration (search+summarizer), E2E (full pipeline)
+- **Pre-commit hook** — TypeScript + ESLint
+- **Vectorize metadata indexes** — year, court, court_level, subcourt (all populated)
+- **Batch ingest pipeline** — with download caching, upsert, full-reset, --index flag
 - **Production deployment** — https://cyprus-case-law.cylaw-study.workers.dev
 
 ## What's Next
 
 ### High Priority
 
-1. **Re-deploy to production** — new Vectorize index, court_level filter, logging, UI changes need `wrangler deploy`
-2. **Delete old `cylaw-search` index** — deprecated, stuck mutation queue, wastes resources
-3. **Implement contextual header prepend** (Improvement 2) — prepend court/case metadata to chunks before embedding, reduces retrieval failures by 49% (see Chunking Improvements section below)
+1. **Re-deploy to production** — summarize-first pipeline, UI changes need `wrangler deploy`
+2. **Implement contextual header prepend** — prepend `[Court | Case | Year]` to chunks before embedding (49-67% retrieval improvement per Anthropic research)
+3. **Reclassify areiospagos** — currently `court_level=supreme` but it's the GREEK Supreme Court, not Cypriot. Its 46K cases dominate Supreme Court results. Move to `court_level=foreign` or separate category.
 
 ### Medium Priority
 
-3. Evaluate embedding upgrade — text-embedding-3-large (3072 dims), needs Pinecone/Qdrant; cost ~$2,400
 4. Persistent summary cache — avoid re-summarizing the same doc for the same query
 5. Server-side conversation history for session persistence
 6. Hybrid search: vector similarity + keyword matching (BM25)
-7. Evaluate Claude Sonnet 4 as summarizer (may handle Greek legal text better)
 
 ### Low Priority
 
-8. Legislation integration — download/index 64,477 legislative acts from cylaw.org
-9. CI/CD pipeline (GitHub Actions -> Cloudflare deploy)
-10. Automated daily scrape of updates.html for new cases
-11. Cross-reference graph analysis
-12. Query analytics dashboard (leverage structured logs)
+7. Legislation integration — 64,477 legislative acts from cylaw.org
+8. CI/CD pipeline (GitHub Actions -> Cloudflare deploy)
+9. Automated daily scrape for new cases
+10. Query analytics dashboard (leverage structured logs)
 
-### Post-Launch: Chunking & Retrieval Quality Improvements
+### Post-Launch: Chunking Improvements
 
-> All changes require re-embedding (~2.27M chunks, ~$15 via Batch API, ~40 min).
-> Do ALL improvements in one batch, then re-ingest with `batch_ingest.py`.
-
-See detailed analysis in the previous session's research. Key improvements:
+> All require re-embedding (~2.27M chunks, ~$15, ~40 min). Do ALL in one batch.
 
 1. **Strip references section** — remove ΑΝΑΦΟΡΕΣ noise from first chunks
-2. **Contextual header prepend** — add `[Court | Case | Year]` to each chunk before embedding (49-67% retrieval improvement per Anthropic research)
-3. **Merge small tail chunks** — merge fragments < 500 chars with previous chunk
+2. **Contextual header prepend** — `[Court | Case | Year]` before embedding
+3. **Merge small tail chunks** — fragments < 500 chars
 
 ## Test Suite
 
 ```
 tests/
-  run.mjs               # unified runner for all tests
-  search.test.mjs       # search regression (14 assertions): document retrieval, year filtering, dedup, quality
-  summarizer.test.mjs   # summarizer eval (28 assertions): engagement levels, relevance, fabrication detection
+  run.mjs               # unified runner
+  search.test.mjs       # search regression (14 assertions)
+  summarizer.test.mjs   # summarizer eval (28 assertions)
+  e2e.test.mjs          # E2E pipeline (4 queries, behavioral assertions)
 ```
 
 | Command | What | When |
 |---------|------|------|
-| `npm test` (from `frontend/`) | All: typecheck + lint + search + summarizer | Before deploy |
-| `npm run test:fast` | Typecheck + lint only (free, 3s) | After every change |
-| `npm run test:integration` | API tests with verbose (~$0.25, 30s) | Search/summarizer changes |
+| `npm test` | typecheck + lint + search + summarizer | Before deploy |
+| `npm run test:fast` | typecheck + lint (free, 3s) | After every change |
+| `npm run test:integration` | API tests (~$0.25) | Search/summarizer changes |
+| `npm run test:e2e` | Full pipeline E2E (~$5-10) | Architecture changes |
 
-Pre-commit hook (`.githooks/pre-commit`) auto-runs TypeScript + ESLint.
+Pre-commit hook auto-runs TypeScript + ESLint.
 
 ## Gotchas for Future Agents
 
-- **Vectorize index is `cyprus-law-cases-search`** — NOT the old `cylaw-search` (deprecated, stuck mutation queue)
-- **Old index `cylaw-search`** — still exists but has no metadata indexes and stuck mutations. Do NOT use. Do NOT try to delete (may timeout).
-- `initOpenNextCloudflareForDev()` creates a **local miniflare R2 emulator** which is EMPTY — use `r2FetchViaS3` for dev instead
-- R2 credentials must be in `frontend/.env.local` for dev S3 API access
-- `CLOUDFLARE_API_TOKEN` must be in `frontend/.env.local` for dev Vectorize REST API access
-- `extractDecisionText()` truncates docs > 80K chars: 35% head + 65% tail
-- **Vectorize topK limit**: `returnMetadata: "all"` limits `topK` to 20. Retriever uses `returnMetadata: "none"` + `getByIds()`.
+### Architecture Decisions (DO NOT REDO)
+
+- **DO NOT add court_level filter to search_cases tool** — tried this, LLM ignores broad search instructions and only searches Supreme Court. The correct approach is court-level sorting in the result formatter, not filtering at search time.
+- **DO NOT add score boost in retriever** — tried ×1.15 for Supreme, ×1.10 for Appeal. Combined with court_level filter, areiospagos (46K Greek cases) dominates all results. If you want court prioritization, do it in result sorting, not score manipulation.
+- **areiospagos is NOT a Cypriot court** — it's the Greek Supreme Court. Its 46K cases are in the database but should NOT be treated as binding Cypriot precedent. Currently `court_level=supreme` — this needs reclassification.
+- **Summarize-first is the correct architecture** — previous approach (search → collect all → summarize batch at end) led to 70-112 docs being summarized at once, most being NONE. Current approach summarizes per-search-call and filters NONE before LLM sees them.
+- **LLM cannot be trusted to follow complex search instructions** — "do 9 searches with 3 court levels each" results in LLM doing 3 searches all with supreme filter. Keep instructions simple: "do 3 searches with different terms."
+
+### Technical Gotchas
+
+- **Vectorize index is `cyprus-law-cases-search`** — NOT `cylaw-search` (deprecated)
+- **Vectorize upsert vs insert**: Always use `/upsert`. `/insert` silently skips existing IDs.
+- **Vectorize metadata index timing**: Indexes must be created BEFORE upserting vectors. Vectors uploaded before index creation won't be filtered.
+- **Vectorize topK limit**: `returnMetadata: "all"` limits `topK` to 20. Use `returnMetadata: "none"` + `getByIds()`.
 - **Vectorize REST API `getByIds` limit**: max 20 IDs per request. `createHttpClient()` batches automatically.
-- **Vectorize upsert vs insert**: Always use `/upsert` for re-uploads. `/insert` silently skips existing IDs.
-- **batch_ingest.py `--index` flag**: Specify target index name (default: `cyprus-law-cases-search`). Use for new indexes.
-- Port 3000 is often taken by Docker. Next.js dev server usually runs on 3001.
-- HTML files from cylaw.org use ISO-8859-7 / Windows-1253 encoding (Greek).
-- **ChromaDB is legacy** — use Vectorize for all search.
+- `initOpenNextCloudflareForDev()` creates an EMPTY miniflare R2 emulator — use `r2FetchViaS3` for dev
+- R2 + Vectorize credentials must be in `frontend/.env.local` for dev
+- `extractDecisionText()` truncates docs > 80K chars: 35% head + 65% tail
+- Port 3000 often taken by Docker; dev server usually on 3001
+- **batch_ingest.py embeddings cache**: `download` command saves OpenAI batch results to `data/batch_embed/embeddings/`. Subsequent `collect`/`reupload` use cached files (no re-download).
 
 ## Ingestion Scripts
 
 | Script | Purpose | Status |
 |--------|---------|--------|
-| `scripts/batch_ingest.py` | **PRIMARY** — OpenAI Batch API -> Vectorize (parallel, 50% cheaper) | Production |
-| Commands: `prepare`, `submit`, `status`, `collect`, `reupload`, `full-reset`, `run`, `reset` | |
-| `scripts/ingest_to_vectorize.py` | Synchronous OpenAI API -> Vectorize (slower) | Legacy |
-| `scripts/export_to_vectorize.py` | Export ChromaDB vectors -> Vectorize | Legacy |
+| `scripts/batch_ingest.py` | **PRIMARY** — OpenAI Batch API -> Vectorize | Production |
+| Commands: `prepare`, `submit`, `status`, `download`, `collect`, `reupload`, `full-reset`, `run`, `reset` | |
 
-### batch_ingest.py key features:
+Key features:
 - `--index NAME` — target Vectorize index (default: `cyprus-law-cases-search`)
-- `reupload` — re-download embeddings from OpenAI + re-upload to Vectorize (no new embedding cost)
-- `full-reset` — delete index + recreate + create metadata indexes + reupload
-- Auto-creates metadata indexes (`year`, `court`, `court_level`, `subcourt`) before uploading
+- `download` — save OpenAI embeddings to disk for fast re-uploads
+- `reupload` — re-upload from cached embeddings (no OpenAI cost)
+- `full-reset` — delete index + recreate + metadata indexes + reupload
+- Auto-creates metadata indexes before uploading
 - 10 parallel download threads, 6 parallel upload threads
-- Uses `/upsert` endpoint (not `/insert`) to overwrite existing vectors
-- Adds `court_level` and `subcourt` metadata computed from `court` and `doc_id`
+- Uses `/upsert` endpoint
 
 ## Last Session Log
 
-### 2026-02-08 (session 2 — metadata, filters, tests, logging, UI)
-- Removed doc summarization limit — now summarizes ALL found documents
-- Added year filtering and court_level filtering to retriever (Vectorize metadata filters)
-- Created new Vectorize index `cyprus-law-cases-search` with 4 metadata indexes (year, court, court_level, subcourt)
-- **Full re-upload completed**: 2,269,131 vectors with enriched metadata (court_level, subcourt)
-- Added `court_level` param to `search_cases` tool — LLM can filter by court hierarchy
-- Added court-level score boost: Supreme ×1.15, Appeal ×1.10
-- Updated system prompt: mandatory 4-phase search (supreme English → supreme Greek → appeal → broad)
-- Updated court names in UI: unified "Supreme Court" for aad/supreme/jsc/rscc
-- Removed Sources section from LLM output (handled by UI)
-- Added relevance scores to Source cards and LLM answer text
-- batch_ingest.py: `--index` flag, `reupload`, `full-reset`, upsert endpoint, 10 download threads
-- Standardized tests into `tests/`, added pre-commit hook, npm test scripts
-- Sources UI: expandable cards with inline summary, relevance badges, sorted by relevance+year
-- Structured JSON logging with sessionId → Cloudflare Workers Logs
+### 2026-02-08 (session 3 — summarize-first pipeline, E2E tests)
+- **Major architecture change**: merged search + summarize into single tool call (summarize-first)
+- Removed `summarize_documents` tool — LLM now has only `search_cases`
+- Each search_cases: Vectorize search → R2 fetch → parallel GPT-4o summarize → filter NONE → sort by court level + relevance + year → return to LLM
+- Deduplication: `summarizedDocIds` Set tracks across searches, prevents re-summarization
+- Court-level sorting in result formatter (Supreme > Appeal > First Instance)
+- NONE relevance filtered before LLM sees results
+- Removed Sources section and concluding paragraphs from LLM output
+- Reverted court_level filter and score boost (caused search degradation — see Gotchas)
+- Created E2E pipeline test suite with 4 behavioral test queries
+- batch_ingest.py: added `download` command for embedding caching
+- System prompt: simplified to "do 3 searches", single tool workflow
+- MAX_TOOL_ROUNDS reduced from 7 to 5
+- Unified court names in UI (aad/supreme → "Supreme Court")
+
+### 2026-02-08 (session 2 — metadata indexes, tests, logging, UI)
+- Created Vectorize index `cyprus-law-cases-search` with metadata indexes
+- Full re-upload: 2,269,131 vectors with court_level + subcourt
+- Standardized tests, pre-commit hook, structured logging, Sources UI
 
 ### 2026-02-08 (session 1 — Vectorize frontend integration)
 - Wired Vectorize into frontend, created VectorizeClient abstraction
-- Auto-summarization: overrides LLM's doc_id selection
 
 ### 2026-02-07 (evening — Vectorize ingestion)
 - Created batch_ingest.py, ingested 2.27M vectors via OpenAI Batch API
