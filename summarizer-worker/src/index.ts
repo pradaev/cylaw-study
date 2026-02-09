@@ -79,7 +79,8 @@ function parseRelevance(summary: string): string {
 function getCourtLevel(court: string): string {
   const map: Record<string, string> = {
     aad: "supreme", supreme: "supreme", supremeAdministrative: "supreme",
-    areiospagos: "supreme", jsc: "supreme", rscc: "supreme", clr: "supreme",
+    jsc: "supreme", rscc: "supreme", clr: "supreme",
+    areiospagos: "foreign",
     courtOfAppeal: "appeal", administrativeCourtOfAppeal: "appeal",
     apofaseised: "first_instance", juvenileCourt: "first_instance",
     administrative: "administrative", administrativeIP: "administrative",

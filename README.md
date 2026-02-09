@@ -18,7 +18,7 @@ AI-powered legal research assistant for Cypriot court cases. Search through 150,
 |-----------|--------|-------|
 | Data collection (15 courts) | **Done** | 149,886 decisions scraped, parsed to Markdown |
 | R2 document storage | **Done** | All 149,886 .md files in `cyprus-case-law-docs` bucket |
-| Vectorize embeddings | **Done** | ~2.27M vectors in `cyprus-law-cases-search` index |
+| Vectorize embeddings | **Done** | ~2.07M vectors in `cyprus-law-cases-search-revised` index |
 | Next.js frontend + chat UI | **Done** | Deployed to Cloudflare Workers |
 | Summarizer Worker | **Done** | `cylaw-summarizer` via Service Binding |
 | Auth (Zero Trust) | **Done** | Cloudflare Zero Trust email OTP |
@@ -68,26 +68,28 @@ Each Service Binding call = new request = fresh 6-connection pool. Solves the Wo
 2. **Download** 150K+ case files (HTML/PDF) → `data/cases/`
 3. **Parse** to Markdown with preserved cross-references → `data/cases_parsed/`
 4. **Upload** to Cloudflare R2 → `cyprus-case-law-docs` bucket (149,886 files)
-5. **Chunk** into overlapping segments (2000 chars, 400 overlap) → ~2.27M chunks
-6. **Embed** via OpenAI Batch API (`text-embedding-3-small`, 1536 dims) → Cloudflare Vectorize (`cyprus-law-cases-search`)
+5. **Chunk** with contextual headers (court, jurisdiction, year, title), cleaned text (no markdown/C1 noise), tail merge → ~2.07M chunks
+6. **Embed** via OpenAI Batch API (`text-embedding-3-small`, 1536 dims) → Cloudflare Vectorize (`cyprus-law-cases-search-revised`)
 
 See [docs/PARSING_PIPELINE.md](docs/PARSING_PIPELINE.md) for full documentation.
 
 ### Vectorize Ingestion
 
 ```bash
-# Full pipeline (prepare → submit → poll → collect)
-python scripts/batch_ingest.py run
-
-# Or step by step:
-python scripts/batch_ingest.py prepare
-python scripts/batch_ingest.py submit
-python scripts/batch_ingest.py status
-python scripts/batch_ingest.py collect
+# Step-by-step pipeline:
+python scripts/batch_ingest.py create-index    # one-time: create Vectorize index + metadata indexes
+python scripts/batch_ingest.py prepare          # chunk docs → JSONL batches
+python scripts/batch_ingest.py submit           # upload to OpenAI Batch API
+python scripts/batch_ingest.py status           # check progress
+python scripts/batch_ingest.py download         # download embeddings to disk
+python scripts/batch_ingest.py upload           # upload local embeddings to Vectorize
 ```
 
-> **WARNING**: The `cyprus-law-cases-search` Vectorize index is PRODUCTION.
-> Do NOT delete or recreate it. ~2.27M vectors, ~$15 to regenerate.
+> **WARNING**: Two Vectorize indexes exist:
+> - `cyprus-law-cases-search` — OLD production index (~2.27M vectors, raw text embeddings)
+> - `cyprus-law-cases-search-revised` — NEW index (~2.07M vectors, contextual headers + jurisdiction)
+>
+> Code currently points to `cyprus-law-cases-search-revised`. ~$15 to regenerate.
 
 ## Quick Start (Local Development)
 
@@ -137,7 +139,7 @@ npx wrangler secret put ANTHROPIC_API_KEY
 | Court | Cases | Period |
 |-------|-------|--------|
 | Ανώτατο Δικαστήριο (old Supreme) | 35,485 | 1961–2024 |
-| Άρειος Πάγος (Areios Pagos) | 46,159 | 1968–2026 |
+| Άρειος Πάγος (Greek Supreme — foreign) | 46,159 | 1968–2026 |
 | Πρωτόδικα Δικαστήρια (First Instance) | 37,840 | 2005–2026 |
 | Διοικ. Πρωτοδικείο (Admin First Inst.) | 6,890 | 2018–2026 |
 | Διοικητικό Δικαστήριο (Administrative) | 5,782 | 2016–2026 |
@@ -211,7 +213,7 @@ cylaw-study/
 - **Deployment**: Cloudflare Workers via @opennextjs/cloudflare
 - **LLM**: OpenAI GPT-4o (search + summarizer), Anthropic Claude Sonnet 4
 - **Document Storage**: Cloudflare R2 (`cyprus-case-law-docs`, 149,886 files)
-- **Vector DB**: Cloudflare Vectorize (`cyprus-law-cases-search`, ~2.27M vectors)
+- **Vector DB**: Cloudflare Vectorize (`cyprus-law-cases-search-revised`, ~2.07M vectors)
 - **Embeddings**: OpenAI `text-embedding-3-small` (1536 dims) via Batch API
 - **Auth**: Cloudflare Zero Trust (email OTP)
 - **Scraping**: Python, BeautifulSoup, multiprocessing

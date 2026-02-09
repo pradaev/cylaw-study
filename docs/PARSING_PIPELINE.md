@@ -387,40 +387,64 @@ Note: Word counts for newly added courts (areiospagos, apofaseised, jsc, rscc, a
 
 Convert Markdown documents into vector embeddings for semantic search.
 
-### Production: Cloudflare Vectorize (`cyprus-law-cases-search`)
+### Production: Cloudflare Vectorize (`cyprus-law-cases-search-revised`)
 
-> **WARNING**: The `cyprus-law-cases-search` index is PRODUCTION. Do NOT delete or recreate it.
+> **NOTE**: Two indexes exist:
+> - `cyprus-law-cases-search-revised` — **current** (contextual headers, jurisdiction, cleaned text)
+> - `cyprus-law-cases-search` — **old** (raw text, no headers, areiospagos as supreme)
 
 | Property | Value |
 |----------|-------|
-| Index name | `cyprus-law-cases-search` |
+| Index name | `cyprus-law-cases-search-revised` |
 | Embedding model | OpenAI `text-embedding-3-small` |
 | Dimensions | 1536 |
 | Metric | cosine |
-| Total vectors | ~2,269,231 |
+| Total vectors | ~2,071,079 |
 | Courts indexed | All 15 |
+| Chunk format | Contextual header + cleaned text (see below) |
+| Metadata fields | `doc_id`, `court`, `year`, `title`, `chunk_index`, `court_level`, `subcourt`, `jurisdiction` |
+| Metadata indexes | `year`, `court`, `court_level`, `subcourt`, `jurisdiction` (all string) |
 | Ingestion method | OpenAI Batch API (`scripts/batch_ingest.py`) |
 | Cost | ~$15 (Batch API = 50% off standard pricing) |
+
+### Chunking Pipeline (`rag/chunker.py`)
+
+Each chunk is processed through these steps before embedding:
+
+1. **Extract metadata** — court, court_level, year, title, jurisdiction (from ΔΙΚΑΙΟΔΟΣΙΑ field or path-based fallback)
+2. **Strip ΑΝΑΦΟΡΕΣ** — remove cross-reference section and ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ marker
+3. **Clean text** — strip markdown links, `*`/`#` formatting, C1 control chars (U+0080–U+009F), normalize unicode, collapse whitespace
+4. **Split** — RecursiveCharacterTextSplitter (2000 chars, 400 overlap)
+5. **Merge tail** — if last chunk < 500 chars, merge with previous (looping)
+6. **Prepend header** — each chunk gets: `Δικαστήριο: {court_name} | Δικαιοδοσία: {jurisdiction} | Έτος: {year} | {title}`
+
+Court level classification:
+- `supreme`: aad, supreme, supremeAdministrative, jsc, rscc, clr
+- `appeal`: courtOfAppeal, administrativeCourtOfAppeal
+- `first_instance`: apofaseised, juvenileCourt
+- `administrative`: administrative, administrativeIP
+- `foreign`: areiospagos (Greek Supreme Court — not Cypriot)
 
 ### Ingestion via OpenAI Batch API (`scripts/batch_ingest.py`)
 
 The production pipeline uses the OpenAI Batch API for embeddings — 50% cheaper than synchronous API, with separate (higher) rate limits and no TPM throttling.
 
 **Pipeline steps:**
-1. **Prepare** — chunk all documents, save metadata index (`chunks_meta.jsonl`), create batch JSONL files (50,000 inputs per batch, 100 inputs per request line)
-2. **Submit** — upload batch files to OpenAI Files API, create batch jobs (`/v1/embeddings` endpoint)
-3. **Status** — poll OpenAI for batch job completion
-4. **Collect** — download embedding results, parse into vectors, upload to Cloudflare Vectorize (parallel: 2 download threads + 6 upload threads)
+1. **Create Index** — one-time: create Vectorize index + metadata indexes
+2. **Prepare** — chunk all documents, save metadata index (`chunks_meta.jsonl`), create batch JSONL files (50,000 inputs per batch, 100 inputs per request line)
+3. **Submit** — upload batch files to OpenAI Files API, create batch jobs (`/v1/embeddings` endpoint)
+4. **Status** — poll OpenAI for batch job completion
+5. **Download** — download embedding results from OpenAI to local disk (3 parallel workers, retry with backoff)
+6. **Upload** — upload local embeddings to Cloudflare Vectorize (parallel upload threads)
 
 ```bash
-# Full pipeline
-python scripts/batch_ingest.py run
-
-# Step by step
+# Step by step (recommended)
+python scripts/batch_ingest.py create-index     # one-time: create index + metadata indexes
 python scripts/batch_ingest.py prepare          # chunk docs → JSONL batches
 python scripts/batch_ingest.py submit           # upload to OpenAI Batch API
 python scripts/batch_ingest.py status           # check progress
-python scripts/batch_ingest.py collect           # download + upload to Vectorize
+python scripts/batch_ingest.py download         # download embeddings to disk
+python scripts/batch_ingest.py upload           # upload local embeddings to Vectorize
 
 # Options
 python scripts/batch_ingest.py prepare --limit 1000   # test subset

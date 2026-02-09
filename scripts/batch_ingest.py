@@ -331,7 +331,7 @@ def step_submit() -> None:
             input_file_id=file_obj.id,
             endpoint="/v1/embeddings",
             completion_window="24h",
-            metadata={"description": f"cyprus-law-cases-search embeddings {fname}"},
+            metadata={"description": f"cyprus-law-cases-search-revised embeddings {fname}"},
         )
 
         print(f"batch_id={batch.id} ✓")

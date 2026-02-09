@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 # ── Config ──────────────────────────────────────────────────────────
 
-VECTORIZE_INDEX = "cyprus-law-cases-search"
+VECTORIZE_INDEX = "cyprus-law-cases-search"  # Legacy: old index (no contextual headers)
 CF_API_BASE = "https://api.cloudflare.com/client/v4"
 OPENAI_MODEL = "text-embedding-3-small"
 OPENAI_DIMS = 1536

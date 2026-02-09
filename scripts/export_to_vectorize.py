@@ -44,7 +44,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Cloudflare Vectorize config
-VECTORIZE_INDEX_NAME = "cyprus-law-cases-search"
+VECTORIZE_INDEX_NAME = "cyprus-law-cases-search"  # Legacy: old index (ChromaDB export)
 CF_API_BASE = "https://api.cloudflare.com/client/v4"
 
 # ChromaDB config — OpenAI embeddings (1536 dims)

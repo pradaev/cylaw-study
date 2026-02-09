@@ -44,7 +44,7 @@ Each Service Binding call = new request = fresh 6-connection pool. Solves the Wo
 - **Main Worker**: `cyprus-case-law` — Next.js on Cloudflare Workers via @opennextjs/cloudflare
 - **Summarizer Worker**: `cylaw-summarizer` — standalone Worker for document summarization
 - **Document storage**: Cloudflare R2 bucket `cyprus-case-law-docs` (149,886 parsed .md files)
-- **Vector search**: Cloudflare Vectorize index `cyprus-law-cases-search`
+- **Vector search**: Cloudflare Vectorize index `cyprus-law-cases-search-revised`
 - **Search in dev**: Vectorize REST API (`frontend/lib/vectorize-client.ts`)
 - **Search in prod**: Vectorize Worker binding (zero-latency)
 - **Observability**: Workers Logs with structured JSON logging (sessionId + userEmail)
@@ -56,7 +56,7 @@ Each Service Binding call = new request = fresh 6-connection pool. Solves the Wo
 |-----------|----------|-------------|
 | `query` | Yes | Search query — short phrases a judge would write in a decision |
 | `legal_context` | Yes | Brief legal framework note (1-2 sentences) |
-| `court_level` | No | `"supreme"` or `"appeal"` — filter by court level |
+| `court_level` | No | `"supreme"`, `"appeal"`, or `"foreign"` — filter by court level |
 | `year_from` | No | Year range start |
 | `year_to` | No | Year range end |
 
@@ -66,13 +66,15 @@ Each Service Binding call = new request = fresh 6-connection pool. Solves the Wo
 
 | Property | Value |
 |----------|-------|
-| Index name | `cyprus-law-cases-search` |
+| Index name | `cyprus-law-cases-search-revised` |
 | Dimensions | 1536 |
 | Metric | cosine |
 | Embedding model | OpenAI `text-embedding-3-small` |
-| Total vectors | 2,269,131 |
-| Metadata fields | `doc_id`, `court`, `year`, `title`, `chunk_index`, `court_level`, `subcourt` |
-| Metadata indexes | `year`, `court`, `court_level`, `subcourt` (all string) |
+| Total vectors | 2,071,079 |
+| Chunk format | Contextual header (court, jurisdiction, year, title) + cleaned text |
+| Metadata fields | `doc_id`, `court`, `year`, `title`, `chunk_index`, `court_level`, `subcourt`, `jurisdiction` |
+| Metadata indexes | `year`, `court`, `court_level`, `subcourt`, `jurisdiction` (all string) |
+| Old index | `cyprus-law-cases-search` (~2.27M vectors, raw text, still on prod — do NOT delete yet) |
 
 ## Ingestion
 
@@ -80,7 +82,7 @@ Each Service Binding call = new request = fresh 6-connection pool. Solves the Wo
 |--------|---------|--------|
 | `scripts/batch_ingest.py` | **PRIMARY** — OpenAI Batch API -> Vectorize | Production |
 
-Commands: `prepare`, `submit`, `status`, `download`, `collect`, `reupload`, `full-reset`, `run`, `reset`
+Commands: `create-index`, `prepare`, `submit`, `status`, `download`, `upload`, `collect`, `reupload`, `full-reset`, `run`, `reset`
 
 ## Deployment
 

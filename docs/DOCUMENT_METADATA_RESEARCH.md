@@ -3,15 +3,20 @@
 > Research into extractable metadata from court decision documents.
 > Goal: enrich Vectorize chunk headers and metadata for better search quality.
 
-## Current State
+## Current State (after re-embedding overhaul, 2026-02-09)
 
-Each chunk in Vectorize has this metadata:
+Each chunk in Vectorize (`cyprus-law-cases-search-revised`) has this metadata:
 
 ```
-doc_id, court, year, title, chunk_index, court_level, subcourt
+doc_id, court, year, title, chunk_index, court_level, subcourt, jurisdiction
 ```
 
-Chunks are embedded as **raw text** — no contextual header, no jurisdiction info.
+Chunks are embedded with a **contextual header** prepended:
+```
+Δικαστήριο: {court_name} | Δικαιοδοσία: {jurisdiction} | Έτος: {year} | {title}
+```
+
+Jurisdiction is extracted from the ΔΙΚΑΙΟΔΟΣΙΑ field (59.4% coverage) with path-based fallback. Text is cleaned (no markdown, C1 chars, encoding noise). ΑΝΑΦΟΡΕΣ sections stripped. Tail chunks < 500 chars merged.
 
 ---
 
