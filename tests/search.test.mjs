@@ -41,7 +41,7 @@ if (!accountId || !apiToken || !openaiKey) {
   process.exit(1);
 }
 
-const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/vectorize/v2/indexes/cyprus-law-cases-search`;
+const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/vectorize/v2/indexes/cyprus-law-cases-search-revised`;
 const cfHeaders = { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" };
 
 // ── Helpers ────────────────────────────────────────────

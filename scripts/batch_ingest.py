@@ -4,31 +4,28 @@
 Uses the Batch API for embeddings — 50% cheaper, separate rate limits,
 no TPM throttling. Completes in minutes instead of hours.
 
-Pipeline steps:
-    1. prepare   — chunk docs, create batch JSONL files + metadata index
-    2. submit    — upload batch files to OpenAI, create batch jobs
-    3. collect   — download embeddings, create metadata indexes, upload to Vectorize
-    4. reupload  — re-upload existing embeddings (after metadata index changes, no API cost)
+Pipeline (step by step):
+    1. create-index — create Vectorize index + metadata indexes (one-time)
+    2. prepare      — chunk docs, create batch JSONL files + metadata index
+    3. submit       — upload batch files to OpenAI, create batch jobs
+    4. status       — check OpenAI batch job progress
+    5. download     — download completed embeddings from OpenAI to disk
+    6. upload       — upload local embeddings to Vectorize
 
 Usage:
-    python scripts/batch_ingest.py run                    # full pipeline (prepare → submit → collect)
-    python scripts/batch_ingest.py reupload               # re-upload with metadata indexes (no OpenAI cost)
-
+    python scripts/batch_ingest.py create-index           # one-time: create index
     python scripts/batch_ingest.py prepare                # chunk & create batches
     python scripts/batch_ingest.py submit                 # send to OpenAI
     python scripts/batch_ingest.py status                 # check progress
-    python scripts/batch_ingest.py collect                # download & upload to Vectorize
+    python scripts/batch_ingest.py download               # download embeddings to disk
+    python scripts/batch_ingest.py upload                 # upload to Vectorize
 
     python scripts/batch_ingest.py prepare --limit 1000   # test with subset
     python scripts/batch_ingest.py prepare --court aad    # one court only
+    python scripts/batch_ingest.py upload --index other   # upload to different index
 
 Environment:
     OPENAI_API_KEY, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
-
-Metadata indexes:
-    The script automatically creates required metadata indexes (year, court)
-    on Vectorize before uploading vectors. This ensures metadata filtering
-    works for all uploaded vectors. See REQUIRED_METADATA_INDEXES constant.
 """
 
 import argparse
@@ -62,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 OPENAI_MODEL = "text-embedding-3-small"
 OPENAI_DIMS = 1536
-VECTORIZE_INDEX_DEFAULT = "cyprus-law-cases-search"
+VECTORIZE_INDEX_DEFAULT = "cyprus-law-cases-search-revised"
 VECTORIZE_INDEX = VECTORIZE_INDEX_DEFAULT  # overridden by --index CLI arg
 CF_API_BASE = "https://api.cloudflare.com/client/v4"
 
@@ -158,6 +155,7 @@ REQUIRED_METADATA_INDEXES = [
     {"propertyName": "court", "indexType": "string"},
     {"propertyName": "court_level", "indexType": "string"},
     {"propertyName": "subcourt", "indexType": "string"},
+    {"propertyName": "jurisdiction", "indexType": "string"},
 ]
 
 
@@ -248,6 +246,7 @@ def step_prepare(court: Optional[str] = None, limit: Optional[int] = None) -> No
                 "chunk_index": chunk["chunk_index"],
                 "court_level": chunk.get("court_level", _detect_court_level(chunk["court"])),
                 "subcourt": chunk.get("subcourt", _detect_subcourt(chunk["doc_id"], chunk["court"])),
+                "jurisdiction": chunk.get("jurisdiction", ""),
             }
             mf.write(json.dumps(meta, ensure_ascii=False) + "\n")
 
@@ -448,6 +447,7 @@ def _parse_batch_vectors(content_text: str, meta_index: list) -> list:
                     "chunk_index": meta["chunk_index"],
                     "court_level": meta.get("court_level", _detect_court_level(meta["court"])),
                     "subcourt": meta.get("subcourt", _detect_subcourt(meta["doc_id"], meta["court"])),
+                    "jurisdiction": meta.get("jurisdiction", ""),
                 },
             })
     return vectors
@@ -485,16 +485,29 @@ def step_download() -> None:
 
     print(f"\nDownloading {len(to_download)} batch files from OpenAI...")
 
-    DOWNLOAD_WORKERS = 10
+    DOWNLOAD_WORKERS = 3
+    MAX_RETRIES = 5
     download_pool = concurrent.futures.ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS)
     t0 = time.time()
 
     def download_and_save(b: dict) -> str:
         client = OpenAI(api_key=openai_key)
-        content = client.files.content(b["output_file_id"])
         out_path = _embedding_file(b)
-        out_path.write_text(content.text, encoding="utf-8")
-        return Path(b["file"]).name
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                content = client.files.content(b["output_file_id"])
+                out_path.write_text(content.text, encoding="utf-8")
+                return Path(b["file"]).name
+            except Exception as exc:
+                if attempt == MAX_RETRIES:
+                    raise
+                wait = min(2 ** attempt, 60)
+                logging.warning(
+                    "Download %s attempt %d failed (%s), retrying in %ds...",
+                    Path(b["file"]).name, attempt, str(exc)[:120], wait,
+                )
+                time.sleep(wait)
+        return Path(b["file"]).name  # unreachable, satisfies type checker
 
     futures = {download_pool.submit(download_and_save, b): b for b in to_download}
     done = 0
@@ -679,6 +692,94 @@ def step_reupload() -> None:
     step_collect()
 
 
+def step_create_index() -> None:
+    """Create Vectorize index with metadata indexes. One-time setup.
+
+    Safe to run multiple times — skips if index/indexes already exist.
+    """
+    headers = _cf_json_headers()
+    acct = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+    base = f"{CF_API_BASE}/accounts/{acct}/vectorize/v2/indexes"
+
+    # 1. Create index
+    print(f"\n[1/2] Creating index '{VECTORIZE_INDEX}' (dims={OPENAI_DIMS}, metric=cosine)...")
+    resp = http_requests.post(
+        base,
+        headers=headers,
+        json={
+            "name": VECTORIZE_INDEX,
+            "config": {
+                "dimensions": OPENAI_DIMS,
+                "metric": "cosine",
+            },
+        },
+        timeout=30,
+    )
+    resp_data = resp.json()
+    if resp.status_code == 200 and resp_data.get("success"):
+        print(f"  ✓ Index created")
+    elif resp_data.get("result", {}).get("name") == VECTORIZE_INDEX:
+        print(f"  ✓ Index created (confirmed by name)")
+    elif "already exists" in resp.text.lower():
+        print(f"  ✓ Index already exists")
+    else:
+        print(f"  ✗ Failed: {resp.status_code} {json.dumps(resp_data, indent=2)[:300]}")
+        return
+
+    # Wait for creation to propagate
+    print("  Waiting 5s for creation to propagate...")
+    time.sleep(5)
+
+    # 2. Create metadata indexes
+    print(f"\n[2/2] Creating metadata indexes...")
+    ensure_metadata_indexes()
+
+    print("Done! Index is ready for vector uploads.")
+
+
+def step_upload() -> None:
+    """Upload local embeddings to Vectorize. No OpenAI calls.
+
+    Reads embeddings from data/batch_embed/embeddings/ (downloaded earlier)
+    and metadata from chunks_meta.jsonl, then upserts to Vectorize.
+
+    Use after 'download' to populate the index.
+    """
+    state = load_state()
+    if state["phase"] not in ("submitted", "collecting", "done"):
+        print(f"Current phase: {state['phase']}. Run download first.")
+        return
+
+    # Check that embedding files exist locally
+    completed = [
+        b for b in state["batches"]
+        if b["status"] == "completed" and b.get("output_file_id")
+    ]
+    local_count = sum(1 for b in completed if _embedding_file(b).exists())
+    if local_count == 0:
+        print(f"No local embedding files found in {EMBEDDINGS_DIR}/")
+        print(f"Run 'download' first to fetch embeddings from OpenAI.")
+        return
+
+    print(f"\nFound {local_count}/{len(completed)} embedding files locally.")
+
+    # Ensure metadata indexes exist
+    ensure_metadata_indexes()
+
+    # Reset collected flags so collect processes all batches
+    for b in state["batches"]:
+        if b["status"] == "completed" and _embedding_file(b).exists():
+            b["collected"] = False
+            b["uploaded"] = 0
+
+    state["phase"] = "submitted"  # allow collect to run
+    state["total_uploaded"] = 0
+    save_state(state)
+
+    # Run collect — it will use local files (no OpenAI download)
+    step_collect()
+
+
 def step_full_reset() -> None:
     """Delete Vectorize index, recreate with metadata indexes, then reupload.
 
@@ -794,7 +895,10 @@ def main():
     )
     parser.add_argument(
         "command",
-        choices=["prepare", "submit", "status", "download", "collect", "reupload", "full-reset", "run", "reset"],
+        choices=[
+            "prepare", "submit", "status", "download", "upload",
+            "create-index", "collect", "reupload", "full-reset", "run", "reset",
+        ],
         help="Pipeline step to run",
     )
     parser.add_argument("--limit", type=int, default=None)
@@ -822,6 +926,10 @@ def main():
             print("Batch data cleared.")
         return
 
+    if args.command == "create-index":
+        step_create_index()
+        return
+
     if args.command == "full-reset":
         step_full_reset()
         return
@@ -834,6 +942,8 @@ def main():
         step_status()
     elif args.command == "download":
         step_download()
+    elif args.command == "upload":
+        step_upload()
     elif args.command == "collect":
         step_collect()
     elif args.command == "reupload":

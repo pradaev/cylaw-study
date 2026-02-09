@@ -70,7 +70,7 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
         returnValues: false,
       };
 
-      if (courtLevel && (courtLevel === "supreme" || courtLevel === "appeal")) {
+      if (courtLevel && ["supreme", "appeal", "foreign"].includes(courtLevel)) {
         queryOptions.filter = { court_level: courtLevel };
       }
 

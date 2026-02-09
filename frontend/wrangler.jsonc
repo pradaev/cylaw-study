@@ -27,7 +27,7 @@
   "vectorize": [
     {
       "binding": "VECTORIZE",
-      "index_name": "cyprus-law-cases-search"
+      "index_name": "cyprus-law-cases-search-revised"
     }
   ],
   "observability": {

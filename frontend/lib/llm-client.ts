@@ -27,6 +27,7 @@ const COURT_LEVEL_ORDER: Record<string, number> = {
   first_instance: 2,
   administrative: 3,
   other: 4,
+  foreign: 5,
 };
 
 // Relevance ordering (lower = higher priority)
@@ -50,7 +51,7 @@ TODAY'S DATE: ${currentDate}. Use this to calculate relative time references (e.
 
 CYPRIOT COURT SYSTEM (your knowledge base covers these courts):
 - Ανώτατο Δικαστήριο (old Supreme Court, "aad") — 35,485 decisions (1961-2024)
-- Άρειος Πάγος (Areios Pagos, "areiospagos") — 46,159 decisions (1968-2026)
+- Άρειος Πάγος (Ελληνικό - ξένο δικαστήριο, "areiospagos") — 46,159 decisions (1968-2026)
 - Πρωτόδικα Δικαστήρια (First Instance Courts, "apofaseised") — 37,840 decisions (2005-2026)
 - Νέο Ανώτατο Δικαστήριο (new Supreme Court, "supreme") — 1,028 decisions (2023-2026)
 - Εφετείο (Court of Appeal, "courtOfAppeal") — 1,111 decisions (2004-2026)
@@ -84,13 +85,13 @@ SEARCH RULES:
 3. Use year_from/year_to filters when the user specifies a time range.
 4. If the user mentions a specific law or article (e.g., "Cap. 148", "Άρθρο 47"), include the exact reference in at least one search query.
 5. Fill legal_context with a BRIEF note of relevant laws and articles — this is supplementary context for the AI analyst, keep it short (1-2 sentences).
-6. Use court_level when the user explicitly asks for a specific court (Ανώτατο Δικαστήριο → "supreme", Εφετείο → "appeal"). If the user asks for BOTH Supreme Court and Court of Appeal, do separate filtered searches for each. Always include at least 1-2 broad searches (no court_level).
+6. Use court_level when the user explicitly asks for a specific court (Ανώτατο Δικαστήριο → "supreme", Εφετείο → "appeal", Άρειος Πάγος → "foreign"). The Άρειος Πάγος is the Greek Supreme Court (not Cypriot) — use court_level=foreign only when the user explicitly asks for Greek court cases. If the user asks for BOTH Supreme Court and Court of Appeal, do separate filtered searches for each. Always include at least 1-2 broad searches (no court_level).
 
 WORKFLOW — you have one tool:
 **search_cases**: Search and analyze court cases. Parameters:
 - **query** (required): Search query in Cypriot Greek legal terminology
 - **legal_context** (required): Your legal analysis — laws, articles, doctrines, key terms. This is passed to the AI analyst who reads each case.
-- **court_level** (optional): "supreme" or "appeal" — use sparingly, only when user asks for specific court
+- **court_level** (optional): "supreme", "appeal", or "foreign" — use sparingly, only when user asks for specific court
 - **year_from** / **year_to** (optional): Year range filter
 
 Each call automatically searches the database, reads full texts, and analyzes each case. The results (relevant court decisions with AI-generated summaries) are displayed directly to the user by the application — you do NOT receive them and do NOT need to list them.
@@ -123,8 +124,8 @@ const SEARCH_TOOL: OpenAI.ChatCompletionTool = {
         },
         court_level: {
           type: "string",
-          enum: ["supreme", "appeal"],
-          description: "Filter by court level. Use when the user asks for a specific court (Ανώτατο Δικαστήριο = supreme, Εφετείο = appeal). Leave empty for broad search across all courts.",
+          enum: ["supreme", "appeal", "foreign"],
+          description: "Filter by court level. Use when the user asks for a specific court (Ανώτατο Δικαστήριο = supreme, Εφετείο = appeal, Άρειος Πάγος = foreign). Leave empty for broad search across all courts.",
         },
         year_from: { type: "integer", description: "Filter: from this year" },
         year_to: { type: "integer", description: "Filter: up to this year" },
@@ -222,7 +223,8 @@ function parseRelevance(summary: string): string {
 function getCourtLevel(court: string): string {
   const map: Record<string, string> = {
     aad: "supreme", supreme: "supreme", supremeAdministrative: "supreme",
-    areiospagos: "supreme", jsc: "supreme", rscc: "supreme", clr: "supreme",
+    jsc: "supreme", rscc: "supreme", clr: "supreme",
+    areiospagos: "foreign",
     courtOfAppeal: "appeal", administrativeCourtOfAppeal: "appeal",
     apofaseised: "first_instance", juvenileCourt: "first_instance",
     administrative: "administrative", administrativeIP: "administrative",
