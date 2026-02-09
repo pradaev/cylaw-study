@@ -7,59 +7,68 @@
 ## Architecture
 
 ```
-User -> Next.js (Cloudflare Worker) -> API Routes
+User -> Cloudflare Zero Trust (email OTP) -> Next.js Worker (cyprus-case-law)
             |
             +-- /api/chat (POST, SSE streaming)
-            |     1. Legal analysis thinking step (LLM identifies laws, terms)
-            |     2. search_cases tool (×3 calls with different terms)
-            |        Each call: Vectorize → R2 fetch → GPT-4o summarize → filter NONE
-            |     3. LLM composes answer from pre-summarized results
-            |     Structured JSON logging -> Workers Logs
+            |     Phase 1: LLM formulates search queries (fast, ~10s)
+            |       - search_cases tool: Vectorize search only (no summarization)
+            |       - Returns doc_ids + metadata to LLM
+            |       - LLM decides if more searches needed (up to 10 rounds)
+            |       - Sources emitted to UI progressively
+            |     Phase 2: Batch summarization via Service Binding
+            |       - All unique doc_ids sent to cylaw-summarizer Worker
+            |       - Batches of 5, each Worker gets own 6-connection pool
+            |       - Each summary emitted to UI as it completes
+            |       - Progress bar: "15/40 (38%)"
+            |     Structured JSON logging with userEmail + sessionId
             |
             +-- /api/doc (GET)
                   Document viewer -> R2 bucket (149,886 .md files)
+                  Auto-appends .md if missing
 ```
 
-### Summarize-First Pipeline
+### Two-Worker Architecture
 
-Each `search_cases` call does everything in one step:
-1. Vectorize semantic search → 15 unique docs (MAX_DOCUMENTS=15, Workers connection limit)
-2. Fetch full text from R2 (batches of 5, concurrency=5)
-3. Summarize each doc with GPT-4o (batches of 5)
-4. Parse relevance rating (HIGH/MEDIUM/LOW/NONE)
-5. Filter out NONE, keep max 15 relevant per search
-6. Sort by: court level (Supreme > Appeal > others) → relevance → year
-7. Return formatted summaries to main LLM
+```
+cyprus-case-law (Main Worker)
+    |
+    +-- Phase 1: LLM tool-calling → Vectorize search (fast)
+    |
+    +-- Phase 2: Service Binding → cylaw-summarizer Worker
+                                      |
+                                      +-- R2 fetch (binding)
+                                      +-- OpenAI GPT-4o summarize
+                                      +-- Returns SummaryResult[]
+```
 
-LLM makes 3 search calls → ~45 docs total → dedup across searches → LLM receives only relevant summaries.
-
-### Legal Analysis Thinking Step
-
-Before searching, LLM must analyze the query using its knowledge of Cypriot law:
-1. Identify area of law (property, torts, procedure, etc.)
-2. Recall specific Cypriot statutes (Cap. 15, Cap. 148, Ν. 232/91, etc.)
-3. Determine precise Greek legal terms (not literal translation)
-4. Generate alternative formulations
-
-This produces significantly better search queries. Example: "delay as defence" → `παραγραφή αξιώσεων` (limitation) instead of literal `καθυστέρηση ως άμυνα`.
+Each Service Binding call = new request = fresh 6-connection pool. Solves the Workers connection limit permanently.
 
 ### Key Components
 
+- **Main Worker**: `cyprus-case-law` — Next.js on Cloudflare Workers via @opennextjs/cloudflare
+- **Summarizer Worker**: `cylaw-summarizer` — standalone Worker for document summarization
 - **Document storage**: Cloudflare R2 bucket `cyprus-case-law-docs` (149,886 parsed .md files)
-- **Document fetch in dev**: S3 HTTP API to real R2 (`r2FetchViaS3`)
-- **Document fetch in prod**: R2 Worker binding (`r2FetchViaBinding`)
 - **Vector search**: Cloudflare Vectorize index `cyprus-law-cases-search`
 - **Search in dev**: Vectorize REST API (`frontend/lib/vectorize-client.ts`)
 - **Search in prod**: Vectorize Worker binding (zero-latency)
-- **Observability**: Workers Logs with structured JSON logging, session tracking (`sessionId`)
-- **Auth**: Cloudflare Zero Trust (email OTP)
+- **Observability**: Workers Logs with structured JSON logging (sessionId + userEmail)
+- **Auth**: Cloudflare Zero Trust (email OTP), `Cf-Access-Authenticated-User-Email` header
+
+### search_cases Tool Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `query` | Yes | Search query — short phrases a judge would write in a decision |
+| `legal_context` | Yes | Brief legal framework note (1-2 sentences) |
+| `court_level` | No | `"supreme"` or `"appeal"` — filter by court level |
+| `year_from` | No | Year range start |
+| `year_to` | No | Year range end |
 
 ### PRODUCTION WARNING — Vectorize Index
 
 > **Index name:** `cyprus-law-cases-search`
 > **Status:** PRODUCTION — 2,269,131 vectors from all 15 courts
 > **DO NOT** delete, drop, or recreate.
-> Old index `cylaw-search` is deprecated (stuck mutation queue).
 
 ### Vectorize Index Details
 
@@ -73,76 +82,58 @@ This produces significantly better search queries. Example: "delay as defence" �
 | Metadata fields | `doc_id`, `court`, `year`, `title`, `chunk_index`, `court_level`, `subcourt` |
 | Metadata indexes | `year`, `court`, `court_level`, `subcourt` (all string) |
 
-### Metadata Index Values
-
-**`court_level`** — hierarchical court classification:
-- `supreme` — aad, supreme, supremeAdministrative, areiospagos, jsc, rscc, clr
-- `appeal` — courtOfAppeal, administrativeCourtOfAppeal
-- `first_instance` — apofaseised, juvenileCourt
-- `administrative` — administrative, administrativeIP
-- `other` — epa, aap
-
-**`subcourt`** — First Instance subcategories (only for `apofaseised`):
-- `pol` (civil), `poin` (criminal), `oik` (family), `enoik` (rental), `erg` (labor)
-
 ## What Works Now
 
-- **Summarize-first pipeline** — search + summarize + filter in one tool call
-- **Legal analysis thinking step** — LLM identifies laws/terms before searching
-- **Chat UI** — Perplexity-style, SSE streaming, multi-model (GPT-4o, o3-mini, Claude Sonnet 4)
-- **Sources UI** — expandable cards with inline AI summary, relevance badges, court-level sorting
-- **Document viewer** — click case links in answer or source cards to view full text
-- **Doc link handling** — catches `/doc?doc_id=`, `/path.md`, and `path.md` link formats
-- **Deduplication** — doc_ids tracked across searches via `summarizedDocIds` Set
+- **Two-phase pipeline** — Phase 1: fast search (LLM + Vectorize), Phase 2: batch summarize (Service Binding)
+- **Service Binding summarizer** — `cylaw-summarizer` Worker, solves 6-connection limit permanently
+- **60-90 documents per query** — MAX_DOCUMENTS=30 per search, 3+ searches with dedup
+- **Progressive UI** — progress bar during summarization, cards appear after all summaries complete
+- **court_level filter** — LLM can filter by `supreme` or `appeal` when user requests specific court
+- **legal_context parameter** — LLM provides brief legal framework note for summarizer
+- **Light theme UI** — white background, Cypriot Greek interface
+- **All UI in Cypriot Greek** — Κυπριακή Νομολογία, no English
+- **Source cards with court findings** — show ΕΥΡΗΜΑΤΑ ΔΙΚΑΣΤΗΡΙΟΥ section, relevance badge, court, year
+- **Document viewer** — click case in source card to view full text, auto-appends .md
+- **Zero Trust email logging** — `Cf-Access-Authenticated-User-Email` tracked in all logs
+- **Structured JSON logging** — chat_request, vectorize_search, summarize_batch, chat_complete, errors
+- **Deduplication** — doc_ids tracked across searches via `seenDocIds` Set
 - **Court-level sorting** — Supreme > Appeal > First Instance in results
-- **NONE filtering** — irrelevant cases filtered before LLM sees them
-- **Year filtering** — applied in retriever
-- **Concurrency control** — batches of 5 for R2 fetch + GPT-4o (Workers 6-connection limit)
-- **Structured logging** — JSON logs with sessionId → Cloudflare Workers Logs
-- **Test suite** — fast, integration, E2E tests
+- **NONE filtering** — irrelevant cases filtered from source cards after all summaries complete
+- **Year filtering** — applied in retriever via Vectorize metadata filter
+- **Test suite** — fast, integration, E2E tests (queries in Cypriot Greek)
 - **Pre-commit hook** — TypeScript + ESLint
-- **Vectorize metadata indexes** — year, court, court_level, subcourt (all populated)
-- **Batch ingest pipeline** — download caching, upsert, full-reset, --index flag
 - **Production deployment** — https://cyprus-case-law.cylaw-study.workers.dev
 
 ## Current Problems & Known Limitations
 
-### Workers Connection Limit (6 simultaneous)
-MAX_DOCUMENTS is set to 15 (not 30) because Cloudflare Workers allow only 6 simultaneous outgoing connections. Even with concurrency=5, 30 docs causes "Connection error" on production. This limits result diversity per search.
-
-**Potential solutions discussed:**
-- Cloudflare Workflows (durable execution, up to 15 min, each step gets own connection pool)
-- Reduce summarizer token output to speed up each call
-- Move summarization to a separate Worker via Service Binding
+### OpenAI Rate Limits (TPM)
+When multiple queries run close together, OpenAI 800K TPM limit can cause some documents to fail summarization. Affected batches return fewer results. Not critical — user can retry.
 
 ### areiospagos Dominance
-areiospagos (Greek Supreme Court, 46K cases) is classified as `court_level=supreme`. It's NOT a Cypriot court but dominates Supreme Court results. Needs reclassification to `court_level=foreign` or similar.
+areiospagos (Greek Supreme Court, 46K cases) is classified as `court_level=supreme`. It's NOT a Cypriot court but dominates Supreme Court results. Needs reclassification to `court_level=foreign`.
 
 ### Embedding Quality
-`text-embedding-3-small` finds "similar words" not "relevant cases". 44% of found docs are rated NONE by summarizer. Contextual header prepend (adding court/case metadata before embedding) could reduce this by 49-67%.
+`text-embedding-3-small` finds "similar words" not "relevant cases". Many found docs rated NONE by summarizer. Contextual header prepend could reduce this by 49-67%.
 
 ## What's Next
 
 ### High Priority
 
-1. **Reclassify areiospagos** — move from `court_level=supreme` to `court_level=foreign`. Requires re-upload of areiospagos vectors (~46K) with updated metadata. This single change will dramatically improve Supreme Court search results.
-2. **Contextual header prepend** — add `[Court | Case | Topic | Year]` to each chunk before embedding. Biggest retrieval quality improvement available. Requires full re-embedding (~$15, ~40 min).
-3. **Deploy latest changes** — thinking step, concurrency fix, doc link handler need `wrangler deploy`.
+1. **Reclassify areiospagos** — move from `court_level=supreme` to `court_level=foreign`
+2. **Contextual header prepend** — add `[Court | Case | Topic | Year]` before embedding
+3. **Persistent summary cache** — avoid re-summarizing same doc for same topic (KV or D1)
 
 ### Medium Priority
 
-4. **Query type classification** — formalize query types (SPECIFIC_PROVISION, LEGAL_DOCTRINE, PROCEDURAL, COMPARATIVE, GENERAL). Each type has optimal search strategy. Currently handled implicitly by thinking step; could become explicit with dedicated classifier.
-5. **Persistent summary cache** — avoid re-summarizing same doc for same topic. Could use KV or D1.
-6. **Increase MAX_DOCUMENTS** — solve Workers connection limit via Cloudflare Workflows or Service Bindings to allow 30+ docs per search.
-7. **Hybrid search** — combine vector similarity with keyword matching (BM25 via D1 FTS5) for queries with specific legal references like "Άρθρο 47 ΚΕΦ. 148".
+4. **Hybrid search** — combine vector similarity with keyword matching (BM25 via D1 FTS5)
+5. **Query analytics dashboard** — leverage structured logs with userEmail
+6. **Retry logic for rate-limited batches** — auto-retry after 429 with backoff
 
 ### Low Priority
 
-8. Legislation integration — 64,477 legislative acts from cylaw.org
-9. CI/CD pipeline (GitHub Actions -> Cloudflare deploy)
-10. Automated daily scrape for new cases
-11. Query analytics dashboard (leverage structured logs)
-12. Knowledge base auto-expansion — save successful query→law mappings for future use
+7. Legislation integration — 64,477 legislative acts from cylaw.org
+8. CI/CD pipeline (GitHub Actions -> Cloudflare deploy)
+9. Automated daily scrape for new cases
 
 ### Post-Launch: Chunking Improvements
 
@@ -152,26 +143,14 @@ areiospagos (Greek Supreme Court, 46K cases) is classified as `court_level=supre
 2. **Contextual header prepend** — `[Court | Case | Year]` before embedding
 3. **Merge small tail chunks** — fragments < 500 chars
 
-## Query Type Taxonomy (discussed, not yet implemented)
-
-| Type | Example | Strategy |
-|------|---------|----------|
-| SPECIFIC_PROVISION | "Article 14 of Law 232/91" | Search by law number + Greek terms |
-| LEGAL_DOCTRINE | "delay as defence to a claim" | Expand doctrine to specific laws (Cap. 15), synonyms |
-| PROCEDURAL | "amending pleadings before hearing" | Search Rules of Civil Procedure terms |
-| COMPARATIVE | "foreign law in property disputes" | International private law terms |
-| GENERAL | "what happens when someone doesn't pay rent" | Standard search, LLM picks terms |
-
-Currently the thinking step handles this implicitly. Could become explicit classifier for more control.
-
 ## Test Suite
 
 ```
 tests/
   run.mjs               # unified runner
-  search.test.mjs       # search regression (14 assertions)
+  search.test.mjs       # search regression (12 assertions)
   summarizer.test.mjs   # summarizer eval (28 assertions)
-  e2e.test.mjs          # E2E pipeline (4 queries, behavioral assertions)
+  e2e.test.mjs          # E2E pipeline (4 queries in Cypriot Greek)
 ```
 
 | Command | What | When |
@@ -181,32 +160,39 @@ tests/
 | `npm run test:integration` | API tests (~$0.25) | Search/summarizer changes |
 | `npm run test:e2e` | Full pipeline E2E (~$5-10) | Architecture changes |
 
-E2E test queries: one-third presumption, foreign law (5 years), amending pleadings, delay as defence.
-
 ## Gotchas for Future Agents
 
-### Architecture Decisions (DO NOT REDO)
+### Architecture Decisions
 
-- **court_level filter in search_cases**: re-added with guardrails. LLM instructed to use on at most 1 of 3 searches. `legal_context` parameter also added — passes LLM's legal analysis to summarizer as focus.
-- **DO NOT add score boost in retriever** — tried ×1.15/×1.10. Combined with filters, areiospagos dominates. Use result sorting instead.
-- **DO NOT increase MAX_DOCUMENTS above 15 on Workers** — 30 docs causes "Connection error" due to 6 simultaneous connection limit. Need Workflows or Service Bindings first.
-- **DO NOT ask LLM to do 9+ searches** — LLM ignores complex instructions. "Do 3 searches" is the reliable maximum.
-- **Summarize-first is the correct architecture** — previous batch-at-end approach led to 70-112 docs summarized at once, most NONE.
-- **Thinking step works** — adding legal analysis before search improved topScore from 0.521 to 0.589 and halved cost.
+- **Service Binding for summarization** — `cylaw-summarizer` Worker handles all document summarization. Each batch of 5 docs = separate Service Binding call = fresh connection pool. This is THE solution to the 6-connection limit.
+- **Two-phase pipeline** — Phase 1 (search) and Phase 2 (summarize) are separate. LLM only does search, never sees summaries. App handles display.
+- **No LLM answer text** — LLM only formulates search queries. No text answer generated. Source cards with court findings ARE the answer.
+- **court_level filter** — LLM can use it but instructed to keep 1-2 broad searches. Works well now.
+- **DO NOT add score boost in retriever** — tried ×1.15/×1.10, areiospagos dominates.
+- **Summarizer prompt in English** — instructions in English, output in Greek. LLM follows English instructions better.
 
 ### Technical Gotchas
 
-- **Workers 6 connection limit** — the real production constraint. Concurrency must be ≤5 for fetch+summarize.
-- **Worker binding getByIds also has 20 ID limit** — not just REST API. Both clients batch by 20.
-- **Vectorize index is `cyprus-law-cases-search`** — NOT `cylaw-search` (deprecated, stuck mutations)
-- **Vectorize upsert vs insert**: `/insert` silently skips existing IDs. Always use `/upsert`.
-- **Vectorize metadata index timing**: Indexes must exist BEFORE upserting vectors.
-- **Vectorize topK limit**: `returnMetadata: "all"` → topK max 20. Use `"none"` + `getByIds()`.
+- **Workers 6 connection limit** — solved by Service Binding to cylaw-summarizer
+- **MAX_DOCUMENTS=30** — safe with Service Binding (each batch gets own connections)
+- **Worker binding getByIds also has 20 ID limit** — both clients batch by 20
+- **Vectorize index is `cyprus-law-cases-search`** — NOT `cylaw-search` (deprecated)
+- **Vectorize topK limit**: `returnMetadata: "all"` → topK max 20. Use `"none"` + `getByIds()`
+- **Doc API auto-appends .md** — LLM often omits `.md` from doc_ids in links
 - `initOpenNextCloudflareForDev()` creates EMPTY miniflare R2 — use `r2FetchViaS3` for dev
 - R2 + Vectorize credentials in `frontend/.env.local` for dev
 - `extractDecisionText()` truncates > 80K chars: 35% head + 65% tail
-- Port 3000 often taken; dev server on 3001
-- **batch_ingest.py `download`**: saves embeddings to disk for fast re-uploads without OpenAI cost
+- **OpenAI 800K TPM rate limit** — parallel batches can hit this, some docs fail
+
+### Deployment
+
+```bash
+# Deploy summarizer worker first
+cd summarizer-worker && source ../.env && npx wrangler deploy
+
+# Deploy main worker
+cd frontend && npm run deploy
+```
 
 ## Ingestion Scripts
 
@@ -216,36 +202,29 @@ E2E test queries: one-third presumption, foreign law (5 years), amending pleadin
 
 Commands: `prepare`, `submit`, `status`, `download`, `collect`, `reupload`, `full-reset`, `run`, `reset`
 
-Key features: `--index`, download caching, upsert, auto metadata indexes, 10 download / 6 upload threads.
-
 ## Last Session Log
 
+### 2026-02-09 (session 4 — major architecture overhaul)
+- **Separated search from summarization**: Phase 1 (LLM search only, fast) + Phase 2 (batch summarize)
+- **Created cylaw-summarizer Worker** with Service Binding — solves 6-connection limit permanently
+- **60-90 documents processed per query** without Connection errors
+- **Switched to Cypriot Greek only** — removed English translate option, all UI in Greek
+- **Light theme** — white background, indigo accents
+- **Progressive UI** — progress bar during summarization, cards appear after completion
+- **Source cards redesigned** — show court findings (ΕΥΡΗΜΑΤΑ), relevance badge, semi-expanded
+- **No LLM answer text** — LLM only searches, source cards ARE the answer
+- **court_level + legal_context** added to search_cases tool
+- **MAX_TOOL_ROUNDS increased to 10** — LLM can do more searches
+- **Doc API auto-appends .md** — fixes broken links from LLM
+- **Zero Trust email logging** — userEmail from Cf-Access-Authenticated-User-Email in all logs
+- **Structured error logging** — all errors as JSON with sessionId, userEmail, stack trace
+- **Summarizer prompt reverted** to stable English version (Greek instructions caused hallucinations)
+- **Relevance rules** clarified: HIGH=RULED, MEDIUM=DISCUSSED, LOW=MENTIONED, NONE=NOT ADDRESSED
+- Tests updated: Cypriot Greek queries, fixed accumulative counters in E2E
+
 ### 2026-02-08 (session 3 — summarize-first, production deployment, thinking step)
-- **Summarize-first pipeline**: merged search + summarize into single tool call
-- Removed `summarize_documents` tool, LLM now has only `search_cases`
-- Each search: Vectorize → R2 fetch → GPT-4o summarize → filter NONE → sort → return to LLM
-- Deduplication via `summarizedDocIds` Set across searches
-- Court-level sorting in result formatter
-- Removed LLM Sources section and concluding paragraphs
-- Reverted court_level filter and score boost experiments (see Gotchas)
-- Created E2E test suite (4 queries)
-- Added `download` command to batch_ingest.py for embedding caching
-- Fixed doc link handler: catches `/path.md` and `path.md` formats
-- **Production deployment issues**: Workers 6-connection limit caused crashes with MAX_DOCUMENTS=30
-  - Fixed: concurrency=5, MAX_DOCUMENTS=15
-  - Fixed: binding client getByIds batching (20 ID limit)
-- **Legal analysis thinking step**: LLM analyzes query → identifies Cypriot laws, Greek terms → better searches
-  - Tested: "delay as defence" topScore 0.521 → 0.589, cost $3.95 → $2.04
-- Discussed query type taxonomy (SPECIFIC_PROVISION, LEGAL_DOCTRINE, PROCEDURAL, COMPARATIVE, GENERAL)
-- Discussed future improvements: Workflows, hybrid search, knowledge base expansion
+- Summarize-first pipeline, E2E tests, production deployment
+- Workers 6-connection limit discovered and partially fixed (concurrency=5, MAX_DOCUMENTS=15)
 
 ### 2026-02-08 (session 2 — metadata indexes, tests, logging, UI)
-- Created Vectorize index `cyprus-law-cases-search` with metadata indexes
-- Full re-upload: 2,269,131 vectors with court_level + subcourt
-- Standardized tests, pre-commit hook, structured logging, Sources UI
-
-### 2026-02-08 (session 1 — Vectorize frontend integration)
-- Wired Vectorize into frontend, created VectorizeClient abstraction
-
-### 2026-02-07 (evening — Vectorize ingestion)
-- Created batch_ingest.py, ingested 2.27M vectors via OpenAI Batch API
+- Vectorize index with metadata indexes, test suite, structured logging
