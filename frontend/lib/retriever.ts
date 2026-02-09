@@ -10,8 +10,8 @@
  *   2. Query Vectorize with topK=100, optional court_level filter
  *   3. Group matching chunks by doc prefix → unique documents
  *   4. Fetch metadata via getByIds() for ALL unique docs
- *   5. Apply court-level score boost (supreme ×1.15, appeal ×1.10)
- *   6. Apply year filtering if yearFrom/yearTo provided
+ *   5. Apply year filtering if yearFrom/yearTo provided
+ *   6. Score filter: drop docs below absolute threshold AND adaptive drop (75% of best)
  *   7. Take top MAX_DOCUMENTS from filtered set
  *   8. Return SearchResult[] with metadata (no full text)
  */
@@ -25,6 +25,10 @@ import type { VectorizeClient } from "./vectorize-client";
 const EMBEDDING_MODEL = "text-embedding-3-small";
 const VECTORIZE_TOP_K = 100;
 const MAX_DOCUMENTS = 30;
+
+// Score-based filtering: discard low-confidence results before expensive summarization
+const MIN_SCORE_THRESHOLD = 0.42;     // absolute floor — below this, never return
+const SCORE_DROP_FACTOR = 0.75;       // adaptive: drop docs scoring < 75% of best match
 
 /** Extract doc prefix from vector ID: "doc_id::chunk_N" → "doc_id" */
 function extractDocPrefix(vectorId: string): string {
@@ -130,8 +134,17 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
         });
       }
 
-      // 8. Take top MAX_DOCUMENTS from filtered set
-      const topDocs = filteredDocs.slice(0, MAX_DOCUMENTS);
+      // 7. Score-based filtering: absolute threshold + adaptive drop
+      const bestScore = filteredDocs[0]?.[1]?.score ?? 0;
+      const adaptiveThreshold = bestScore * SCORE_DROP_FACTOR;
+      const effectiveThreshold = Math.max(MIN_SCORE_THRESHOLD, adaptiveThreshold);
+
+      const scoredDocs = filteredDocs.filter(
+        ([, doc]) => doc.score >= effectiveThreshold,
+      );
+
+      // 8. Take top MAX_DOCUMENTS from score-filtered set
+      const topDocs = scoredDocs.slice(0, MAX_DOCUMENTS);
 
       console.log(JSON.stringify({
         event: "vectorize_search",
@@ -142,8 +155,10 @@ export function createVectorizeSearchFn(client: VectorizeClient): SearchFn {
         chunksMatched: results.matches.length,
         uniqueDocs: sortedDocs.length,
         afterYearFilter: filteredDocs.length,
+        afterScoreFilter: scoredDocs.length,
         returned: topDocs.length,
-        topScore: topDocs[0]?.[1]?.score ?? 0,
+        topScore: bestScore,
+        scoreThreshold: parseFloat(effectiveThreshold.toFixed(4)),
       }));
 
       // 9. Return as SearchResult (metadata only, no full text)
