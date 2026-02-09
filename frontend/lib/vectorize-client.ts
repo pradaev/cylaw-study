@@ -1,7 +1,7 @@
 /**
  * Vectorize client abstraction — same interface for binding (production) and HTTP (dev).
  *
- * Both implementations hit the SAME production Vectorize index (cylaw-search).
+ * Both implementations hit the SAME production Vectorize index (cyprus-law-cases-search).
  * - Production: uses Cloudflare Worker binding (zero-latency, no auth needed)
  * - Dev: uses Cloudflare REST API over HTTPS (needs API token)
  */

@@ -1,12 +1,13 @@
 /**
- * Agentic LLM client with summarize-first pipeline.
+ * Two-phase LLM pipeline for legal case search.
  *
- * Flow:
- *   1. Main LLM calls search_cases → retriever finds docs → summarizer reads each → returns summaries
- *   2. Main LLM receives pre-summarized results (NONE filtered out) and composes answer
- *
- * Each search_cases call triggers inline summarization — no separate summarize step.
- * Documents are deduplicated across searches. Court-level boost applied to ordering.
+ * Phase 1: LLM formulates search queries → Vectorize search → collect doc_ids (fast, ~10s)
+ *   - Up to MAX_TOOL_ROUNDS iterations, LLM decides when to stop
+ *   - Documents deduplicated across searches via seenDocIds
+ * Phase 2: Batch summarization of ALL found docs → source cards shown to user
+ *   - Production: cylaw-summarizer Worker via Service Binding (batches of 5)
+ *   - Dev: direct OpenAI calls
+ *   - No LLM answer text — source cards with court findings ARE the answer
  */
 
 import OpenAI from "openai";

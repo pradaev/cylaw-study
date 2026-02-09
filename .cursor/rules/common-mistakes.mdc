@@ -1,7 +1,7 @@
 ---
 description: Avoid common Next.js + Cloudflare Workers pitfalls
 globs: "**/*.{ts,tsx,js,jsx}"
-alwaysApply: true
+alwaysApply: false
 ---
 
 # Common Mistakes

@@ -1,14 +1,14 @@
 ---
-description: Validation & Decision Process
+description: Validation, decision logging, and rule governance
 globs: "*"
 alwaysApply: true
 ---
 
-# Search & Validate
+# Search, Validate & Govern
 
 <rule>
-1. **Search**: Query official docs ("Next.js 15", "Cloudflare Workers 2026", "Clerk", "Stripe") before coding. Use online search to validate solutions against 2026 best practices.
-2. **Sources**: Prioritize Official Docs > GitHub Issues (<12mo). Reject old tutorials (>18mo). Always include the current year (2026) in search queries for time-sensitive tech.
-3. **Log**: Record architectural decisions in `DECISIONS.md` (Date | Topic | Decision | Rationale).
-4. **Verify**: Don't guess APIs for beta/edge tech. Use the `web_search` tool to confirm current implementation patterns before proceeding.
+1. **Search**: Query official docs before coding. Include current year (2026) in queries for time-sensitive tech.
+2. **Sources**: Official Docs > GitHub Issues (<12mo). Reject old tutorials (>18mo).
+3. **Decisions**: Record in `DECISIONS.md` (Date | Topic | Decision | Rationale).
+4. **Rule changes**: Log deviations with date, rationale in `DECISIONS.md`.
 </rule>

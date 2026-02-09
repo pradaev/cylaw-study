@@ -1,15 +1,16 @@
 /**
- * Chat API route with SSE streaming and multi-agent summarization.
+ * Chat API route with SSE streaming and two-phase pipeline.
  *
  * POST /api/chat
- * Body: { messages: ChatMessage[], model: string, translate: boolean }
+ * Body: { messages: ChatMessage[], model: string, sessionId: string }
  *
- * Flow: Main LLM → search_cases → summarize_documents (parallel agents) → answer
+ * Flow:
+ *   Phase 1: LLM formulates search queries → Vectorize search (fast, metadata only)
+ *   Phase 2: Batch summarization via cylaw-summarizer Worker (Service Binding)
  *
  * Document fetching for summarizer:
- *   - Production (Cloudflare Workers): reads from R2 bucket via binding
- *   - Dev with wrangler / initOpenNextCloudflareForDev: also reads from R2
- *   - Dev fallback (no CF context): reads from local Python search server
+ *   - Production: R2 via Worker binding
+ *   - Dev: R2 via S3 HTTP API
  */
 
 import { NextRequest, NextResponse } from "next/server";

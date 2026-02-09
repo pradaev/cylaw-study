@@ -1,26 +1,26 @@
 # Cyprus Case Law
 
-AI-powered legal research assistant for Cypriot court cases. Search through 150,000+ court decisions using natural language in Greek, English, or Russian.
+AI-powered legal research assistant for Cypriot court cases. Search through 150,000+ court decisions using natural language in Greek.
 
 ## What it does
 
-- **AI-powered legal research** — ask legal questions, get answers with citations to specific cases
-- **Multi-agent analysis** — parallel AI agents summarize full court decisions with 4-level relevance rating (RULED/DISCUSSED/MENTIONED/NOT ADDRESSED)
-- **Document viewer** — read full case text with AI analysis summary shown before the document
+- **AI-powered legal research** — ask legal questions in Greek, get relevant court decisions with summaries
+- **Two-phase pipeline** — Phase 1: LLM formulates search queries via Vectorize. Phase 2: batch summarization via dedicated Worker
+- **4-level relevance rating** — each case rated as RULED / DISCUSSED / MENTIONED / NOT ADDRESSED
+- **Source cards with court findings** — ΕΥΡΗΜΑΤΑ ΔΙΚΑΣΤΗΡΙΟΥ shown directly, no LLM free-text answer
+- **Document viewer** — read full case text by clicking on any source card
 - **Multi-model** — GPT-4o, o3-mini, Claude Sonnet 4 (user selects in UI)
 - **Cost tracking** — per-request cost and token usage displayed
-- **Translation** — toggle English translation for non-Greek speakers
 
 ## Current Status
 
 | Component | Status | Notes |
 |-----------|--------|-------|
 | Data collection (15 courts) | **Done** | 149,886 decisions scraped, parsed to Markdown |
-| R2 document storage | **Done** | All 149,886 .md files uploaded to `cyprus-case-law-docs` bucket |
+| R2 document storage | **Done** | All 149,886 .md files in `cyprus-case-law-docs` bucket |
+| Vectorize embeddings | **Done** | ~2.27M vectors in `cyprus-law-cases-search` index |
 | Next.js frontend + chat UI | **Done** | Deployed to Cloudflare Workers |
-| Summarizer (R2 → GPT-4o) | **Done** | Reads full docs from R2 in both dev and production |
-| Vectorize (embeddings) | **Done** | ~2.27M vectors in `cylaw-search` index (all 15 courts) |
-| Vectorize → frontend wiring | **Next** | Write `retriever.ts`, add Vectorize binding, redeploy |
+| Summarizer Worker | **Done** | `cylaw-summarizer` via Service Binding |
 | Auth (Zero Trust) | **Done** | Cloudflare Zero Trust email OTP |
 
 **Production URL:** https://cyprus-case-law.cylaw-study.workers.dev
@@ -28,42 +28,39 @@ AI-powered legal research assistant for Cypriot court cases. Search through 150,
 ## Architecture
 
 ```
-User → Next.js (Cloudflare Worker) → API Routes → Main LLM (GPT-4o / Claude)
-                                          │
-                                    search_cases tool
-                                          │
-                              ┌── Dev: ChromaDB (Python server, legacy)
-                              └── Prod: Cloudflare Vectorize (cylaw-search)
-                                          │
-                                 summarize_documents tool
-                                          │
-                              For each doc_id (parallel, up to 10):
-                              ┌── Dev: R2 via S3 HTTP API
-                              └── Prod: R2 via Worker binding
-                                          │
-                                   GPT-4o summarizes full text
-                                    (extractDecisionText, max 80K chars)
-                                          │
-                                 Main LLM composes final answer
-                                  with all sources cited
+User → Cloudflare Zero Trust (email OTP) → Next.js Worker (cyprus-case-law)
+                                                │
+                                    /api/chat (POST, SSE streaming)
+                                                │
+                              Phase 1: LLM formulates search queries
+                                    search_cases tool → Vectorize
+                                    (up to 10 rounds, dedup across searches)
+                                                │
+                              Phase 2: Batch summarization
+                                    Service Binding → cylaw-summarizer Worker
+                                      ├── R2 fetch (binding)
+                                      ├── OpenAI GPT-4o summarize
+                                      └── Returns SummaryResult[]
+                                                │
+                                    /api/doc (GET)
+                                      Document viewer → R2 bucket
 ```
 
-### Document fetching strategy
+### Two-Worker design
 
-| Environment | Documents (for summarizer) | Search (for finding cases) |
-|-------------|---------------------------|---------------------------|
-| `npm run dev` | R2 via S3 API (real bucket) | Python search server → ChromaDB (legacy) |
-| `npm run dev` (no Python) | R2 via S3 API | Not available |
-| Production (CF Worker) | R2 via Worker binding | Cloudflare Vectorize (`cylaw-search`) |
+| Worker | Role | Key bindings |
+|--------|------|-------------|
+| `cyprus-case-law` | Main app (Next.js) | R2, Vectorize, Summarizer Service Binding |
+| `cylaw-summarizer` | Document summarization | R2 |
 
-**Key design decisions:**
-- Search returns metadata only (no full text) — fast and cheap
-- Each document is summarized in parallel by a dedicated GPT-4o agent
-- Summaries include engagement level (RULED/DISCUSSED/MENTIONED) and relevance rating — prevents main LLM from fabricating court holdings
-- Results sorted by relevance then by year (newest first) at code level
-- Main LLM receives focused summaries (~10K tokens) instead of full docs (~150K tokens)
-- AI Analysis shown in DocViewer before full text — user sees summary reasoning per case
-- Dev uses S3 HTTP API to reach the REAL R2 bucket (not miniflare emulator)
+Each Service Binding call = new request = fresh 6-connection pool. Solves the Workers connection limit.
+
+### Environment differences
+
+| Environment | Documents | Search | Summarization |
+|-------------|-----------|--------|---------------|
+| Production | R2 via Worker binding | Vectorize binding (zero-latency) | Summarizer Worker (Service Binding) |
+| Dev (`npm run dev`) | R2 via S3 HTTP API | Vectorize REST API | Direct OpenAI calls |
 
 ## Data Pipeline
 
@@ -71,28 +68,26 @@ User → Next.js (Cloudflare Worker) → API Routes → Main LLM (GPT-4o / Claud
 2. **Download** 150K+ case files (HTML/PDF) → `data/cases/`
 3. **Parse** to Markdown with preserved cross-references → `data/cases_parsed/`
 4. **Upload** to Cloudflare R2 → `cyprus-case-law-docs` bucket (149,886 files)
-5. **Chunk** into overlapping segments (~2.27M chunks)
-6. **Embed** via OpenAI Batch API (`text-embedding-3-small`, 1536 dims) → Cloudflare Vectorize (`cylaw-search`)
+5. **Chunk** into overlapping segments (2000 chars, 400 overlap) → ~2.27M chunks
+6. **Embed** via OpenAI Batch API (`text-embedding-3-small`, 1536 dims) → Cloudflare Vectorize (`cyprus-law-cases-search`)
 
 See [docs/PARSING_PIPELINE.md](docs/PARSING_PIPELINE.md) for full documentation.
 
 ### Vectorize Ingestion
-
-The production Vectorize index was populated using `scripts/batch_ingest.py` — an OpenAI Batch API pipeline:
 
 ```bash
 # Full pipeline (prepare → submit → poll → collect)
 python scripts/batch_ingest.py run
 
 # Or step by step:
-python scripts/batch_ingest.py prepare          # chunk docs, create batch JSONL files
-python scripts/batch_ingest.py submit           # upload to OpenAI Batch API
-python scripts/batch_ingest.py status           # check batch progress
-python scripts/batch_ingest.py collect           # download embeddings, upload to Vectorize
+python scripts/batch_ingest.py prepare
+python scripts/batch_ingest.py submit
+python scripts/batch_ingest.py status
+python scripts/batch_ingest.py collect
 ```
 
-> **WARNING**: The `cylaw-search` Vectorize index is PRODUCTION. Do NOT delete or recreate it.
-> It contains ~2.27M vectors from all 15 courts. Recreating requires ~$15 in OpenAI costs and ~2 hours.
+> **WARNING**: The `cyprus-law-cases-search` Vectorize index is PRODUCTION.
+> Do NOT delete or recreate it. ~2.27M vectors, ~$15 to regenerate.
 
 ## Quick Start (Local Development)
 
@@ -102,48 +97,40 @@ pip install -r requirements.txt
 
 # 2. Set API keys
 cp .env.example .env
-# Edit .env: OPENAI_API_KEY, ANTHROPIC_API_KEY, CLOUDFLARE_* credentials
+# Edit .env: OPENAI_API_KEY, CLOUDFLARE_* credentials
 
 # 3. Set up frontend
 cd frontend
 npm install
-# Create .env.local with API keys and R2 credentials:
+# Create .env.local with:
 #   OPENAI_API_KEY=...
 #   ANTHROPIC_API_KEY=...
 #   CLOUDFLARE_ACCOUNT_ID=...
 #   CLOUDFLARE_R2_ACCESS_KEY_ID=...
 #   CLOUDFLARE_R2_SECRET_ACCESS_KEY=...
+#   CLOUDFLARE_API_TOKEN=...
 
-# 4. Start frontend (documents load from R2, no Python needed)
+# 4. Start frontend
 npm run dev
 # Open http://localhost:3001
-
-# 5. (Optional) Start search server for case search
-# In another terminal:
-cd .. && python -m rag.search_server --provider local
 ```
 
-### Development modes
-
-| Mode | What works | Python needed? |
-|------|-----------|---------------|
-| `npm run dev` only | Chat (general questions), DocViewer, summarizer | No |
-| `npm run dev` + Python search server | Everything including case search | Yes |
+Dev mode uses real R2 bucket and real Vectorize index via HTTP APIs. No Python server needed.
 
 ## Deployment
 
 ```bash
-cd frontend
+# Deploy summarizer worker first
+cd summarizer-worker && source ../.env && npx wrangler deploy
 
-# Build and deploy
-npm run deploy
+# Deploy main worker
+cd frontend && npm run deploy
 
 # Set secrets (one-time)
+cd frontend
 npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put ANTHROPIC_API_KEY
 ```
-
-R2 bucket binding (`DOCS_BUCKET`) is configured in `wrangler.jsonc`.
 
 ## Courts Covered (15 courts, 149,886 decisions)
 
@@ -172,37 +159,39 @@ cylaw-study/
   frontend/                    # Next.js app (Cloudflare Workers)
     app/
       page.tsx                 # Chat page (main UI)
-      api/chat/route.ts        # POST: SSE streaming chat + summarization
+      api/chat/route.ts        # POST: SSE streaming chat + search + summarize
       api/doc/route.ts         # GET: document viewer (R2)
     lib/
-      llm-client.ts            # Multi-agent LLM: search → summarize → answer
-      local-retriever.ts       # Dev: search via Python server + doc fetch via R2 S3 API
+      llm-client.ts            # Two-phase pipeline: search → batch summarize
+      retriever.ts             # Vectorize search (embed → query → group → return)
+      vectorize-client.ts      # Vectorize client (binding for prod, HTTP for dev)
+      local-retriever.ts       # Dev: legacy ChromaDB search via Python server
       types.ts                 # Shared TypeScript interfaces
     components/                # React components (ChatArea, DocViewer, etc.)
-    wrangler.jsonc             # Cloudflare bindings (R2, Vectorize)
+    wrangler.jsonc             # Cloudflare bindings (R2, Vectorize, Summarizer)
+  summarizer-worker/           # Standalone Worker for document summarization
+    src/index.ts               # R2 fetch → GPT-4o summarize → SummaryResult[]
+    wrangler.jsonc             # R2 binding
   scripts/                     # Ingestion and utility scripts
     batch_ingest.py            # PRIMARY: OpenAI Batch API → Vectorize (production)
     ingest_to_vectorize.py     # Legacy: synchronous OpenAI API → Vectorize
     export_to_vectorize.py     # Legacy: export ChromaDB → Vectorize
   rag/                         # Python: embeddings, search, upload
-    search_server.py           # FastAPI search server (ChromaDB, legacy dev)
     upload_to_r2.py            # Upload parsed docs to R2
     chunker.py                 # Text chunking logic
+    search_server.py           # FastAPI search server (ChromaDB, legacy dev)
     ingest.py                  # Chunk + embed into ChromaDB (legacy)
-    migrate_to_cloudflare.py   # Migrate ChromaDB → Vectorize (legacy)
   scraper/                     # Python: scraping + parsing pipeline
+    scrape.py                  # CLI orchestrator for index scraping
+    downloader.py              # Bulk file downloader (30 threads)
     extract_text.py            # HTML/PDF → Markdown converter
-    downloader.py              # Bulk file downloader
     parser.py                  # Index page parser
+    config.py                  # Court registry (15 courts)
   data/                        # Local data (gitignored)
-    cases/                     # Raw HTML/PDF files
-    cases_parsed/              # Parsed Markdown files
-    indexes/                   # JSON index files
-    batch_embed/               # Batch API state and JSONL files
   docs/                        # Documentation
+    ARCHITECTURE.md            # Stable architecture reference
     PARSING_PIPELINE.md        # Full pipeline documentation
     DATABASE_AUDIT.md          # Court coverage audit
-    plans/                     # Implementation plans
 ```
 
 ## Environment Variables
@@ -214,17 +203,16 @@ cylaw-study/
 | `CLOUDFLARE_ACCOUNT_ID` | `.env` + `.env.local` | Cloudflare account ID |
 | `CLOUDFLARE_R2_ACCESS_KEY_ID` | `.env` + `.env.local` | R2 S3 API access key (dev only) |
 | `CLOUDFLARE_R2_SECRET_ACCESS_KEY` | `.env` + `.env.local` | R2 S3 API secret key (dev only) |
-| `CLOUDFLARE_API_TOKEN` | `.env` | For wrangler deploy/secret commands |
+| `CLOUDFLARE_API_TOKEN` | `.env` | For wrangler deploy and Vectorize REST API (dev) |
 
 ## Tech Stack
 
 - **Frontend**: Next.js 16, React, TypeScript, Tailwind CSS
 - **Deployment**: Cloudflare Workers via @opennextjs/cloudflare
-- **LLM**: OpenAI GPT-4o (main + summarizer agents), Anthropic Claude Sonnet 4
-- **Document Storage**: Cloudflare R2 (`cyprus-case-law-docs` bucket, 149,886 files)
-- **Vector DB**: Cloudflare Vectorize (`cylaw-search` index, ~2.27M vectors, PRODUCTION)
+- **LLM**: OpenAI GPT-4o (search + summarizer), Anthropic Claude Sonnet 4
+- **Document Storage**: Cloudflare R2 (`cyprus-case-law-docs`, 149,886 files)
+- **Vector DB**: Cloudflare Vectorize (`cyprus-law-cases-search`, ~2.27M vectors)
 - **Embeddings**: OpenAI `text-embedding-3-small` (1536 dims) via Batch API
-- **Legacy Vector DB**: ChromaDB (local dev only, original 9 courts)
 - **Auth**: Cloudflare Zero Trust (email OTP)
 - **Scraping**: Python, BeautifulSoup, multiprocessing
 

@@ -387,13 +387,13 @@ Note: Word counts for newly added courts (areiospagos, apofaseised, jsc, rscc, a
 
 Convert Markdown documents into vector embeddings for semantic search.
 
-### Production: Cloudflare Vectorize (`cylaw-search`)
+### Production: Cloudflare Vectorize (`cyprus-law-cases-search`)
 
-> **WARNING**: The `cylaw-search` index is PRODUCTION. Do NOT delete or recreate it.
+> **WARNING**: The `cyprus-law-cases-search` index is PRODUCTION. Do NOT delete or recreate it.
 
 | Property | Value |
 |----------|-------|
-| Index name | `cylaw-search` |
+| Index name | `cyprus-law-cases-search` |
 | Embedding model | OpenAI `text-embedding-3-small` |
 | Dimensions | 1536 |
 | Metric | cosine |
