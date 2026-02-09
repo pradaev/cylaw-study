@@ -6,9 +6,10 @@
 
 ## What Works Now
 
-- **Two-phase pipeline** — Phase 1: fast search (LLM + Vectorize), Phase 2: batch summarize (Service Binding)
+- **Three-phase pipeline** — Phase 1: search (LLM + Vectorize), Phase 1.5: rerank (GPT-4o-mini), Phase 2: summarize (Service Binding)
 - **Service Binding summarizer** — `cylaw-summarizer` Worker, solves 6-connection limit
-- **60-90 documents per query** — MAX_DOCUMENTS=30 per search, 3+ searches with dedup
+- **Reranker pre-filter** — GPT-4o-mini scores 48 docs by preview → keeps ~22 for full summarization (~$0.003)
+- **Score threshold** — retriever drops docs below 0.42 cosine and below 75% of best match
 - **Progressive UI** — progress bar during summarization, cards appear after completion
 - **court_level filter** — LLM filters by `supreme`, `appeal`, or `foreign`
 - **legal_context parameter** — LLM provides legal framework note for summarizer
@@ -29,14 +30,15 @@
 ## Current Problems
 
 - **OpenAI 800K TPM** — parallel batches can hit rate limit, some docs fail. User can retry.
-- **Low hit rate (~4%)** — Improved from 2% with query diversification (facet strategy), but still low. LLM uses different legal vocabulary per query now, but embedding model still finds keyword-similar but legally irrelevant docs.
-- **Embedding quality** — `text-embedding-3-small` finds similar words, not relevant cases. Many NONE results.
+- **Hit rate ~14%** — Improved from 2% (baseline) → 4% (query diversification) → 14% (reranker). Still 86% NONE after summarization. Root cause: embedding model clusters scores in tight 0.42-0.52 band.
+- **Embedding quality** — `text-embedding-3-small` finds similar words, not relevant cases. Hybrid search (BM25 + vector) is next step.
 
 ## What's Next
 
 ### High Priority
-1. ~~**LLM search query diversification**~~ — DONE: facet-based query strategy, keyword overlap constraint, anti-pattern examples, worked Greek example. Hit rate: 2% → 4% on niche query.
-2. **Persistent summary cache** — KV or D1, avoid re-summarizing same doc
+1. ~~**LLM search query diversification**~~ — DONE: facet-based query strategy. Hit rate: 2% → 4%.
+2. ~~**Lightweight reranker**~~ — DONE: GPT-4o-mini pre-filter. Hit rate: 4% → 14%, cost: $2.33 → $1.16.
+3. **Persistent summary cache** — KV or D1, avoid re-summarizing same doc
 
 ### Medium Priority
 3. **Hybrid search** — vector + keyword matching (BM25 via D1 FTS5)
@@ -52,8 +54,8 @@
 
 ### Architecture
 - **Service Binding** — each batch of 5 docs = separate call = fresh connection pool
-- **Two-phase pipeline** — LLM only searches, never sees summaries. Source cards ARE the answer.
-- **No LLM answer text** — LLM only formulates search queries, source cards ARE the answer.
+- **Three-phase pipeline** — LLM searches → GPT-4o-mini reranks → GPT-4o summarizes. Source cards ARE the answer.
+- **Reranker** — reads first 600 chars per doc, scores 0-10 in one batch call, keeps >= 4. Cost ~$0.003.
 - **Summarizer prompt in English** — output in Greek, instructions in English (fewer hallucinations)
 
 ### Technical
@@ -87,6 +89,12 @@
 
 ## Last Session Log
 
+### 2026-02-09 (session 8 — search quality: score threshold + reranker)
+- Added score threshold in `retriever.ts`: MIN_SCORE=0.42, adaptive drop at 75% of best match
+- Added GPT-4o-mini reranker in `llm-client.ts`: reads 600 chars, scores 0-10, keeps >= 4
+- Test results: 48 docs → 22 reranked → 3 kept (14% hit rate), cost $1.16, time 144s
+- Comparison: baseline 4% / $2.33 / 328s → with reranker 14% / $1.16 / 144s
+
 ### 2026-02-09 (session 7 — LLM query diversification + doc audit)
 - Fixed 24 stale references in 11 files (index names, pipeline commands, areiospagos classification)
 - Implemented LLM search query diversification in `buildSystemPrompt()`: facet-based strategy, keyword overlap constraint, anti-pattern/worked examples, strengthened legal_context
@@ -103,7 +111,4 @@
 - Added retry logic + reduced parallelism for OpenAI file downloads
 - Created comparison (`scripts/compare_indexes.mjs`) and diagnostic (`scripts/deep_dive_query.mjs`) tools
 
-### 2026-02-09 (session 5 — context optimization + documentation audit)
-- Documentation audit, README rewrite, fixed stale references
-- Trimmed PROJECT_STATUS.md, moved architecture to docs/ARCHITECTURE.md
 
