@@ -29,13 +29,13 @@
 ## Current Problems
 
 - **OpenAI 800K TPM** — parallel batches can hit rate limit, some docs fail. User can retry.
-- **Low hit rate (~2%)** — LLM generates near-identical search queries (word rearrangements), embedding finds keyword-similar but legally irrelevant docs. Needs prompt diversification strategy.
+- **Low hit rate (~4%)** — Improved from 2% with query diversification (facet strategy), but still low. LLM uses different legal vocabulary per query now, but embedding model still finds keyword-similar but legally irrelevant docs.
 - **Embedding quality** — `text-embedding-3-small` finds similar words, not relevant cases. Many NONE results.
 
 ## What's Next
 
 ### High Priority
-1. **LLM search query diversification** — rewrite system prompt to force diverse facets per query (see `docs/plan/llm_search_query_improvement_*.plan.md`)
+1. ~~**LLM search query diversification**~~ — DONE: facet-based query strategy, keyword overlap constraint, anti-pattern examples, worked Greek example. Hit rate: 2% → 4% on niche query.
 2. **Persistent summary cache** — KV or D1, avoid re-summarizing same doc
 
 ### Medium Priority
@@ -87,6 +87,11 @@
 
 ## Last Session Log
 
+### 2026-02-09 (session 7 — LLM query diversification + doc audit)
+- Fixed 24 stale references in 11 files (index names, pipeline commands, areiospagos classification)
+- Implemented LLM search query diversification in `buildSystemPrompt()`: facet-based strategy, keyword overlap constraint, anti-pattern/worked examples, strengthened legal_context
+- Deep-dive diagnostic: hit rate improved 2% → 4% on niche foreign-law query
+
 ### 2026-02-09 (session 6 — vectorize re-embedding overhaul)
 - Implemented full re-embedding pipeline: chunker overhaul (contextual headers, jurisdiction extraction, ΑΝΑΦΟΡΕΣ stripping, markdown/C1 cleaning, tail merge)
 - Reclassified areiospagos → `court_level=foreign` in chunker, llm-client, retriever
@@ -102,6 +107,3 @@
 - Documentation audit, README rewrite, fixed stale references
 - Trimmed PROJECT_STATUS.md, moved architecture to docs/ARCHITECTURE.md
 
-### 2026-02-09 (session 4 — major architecture overhaul)
-- Two-phase pipeline, Service Binding summarizer, progressive UI
-- court_level + legal_context, Zero Trust email logging
