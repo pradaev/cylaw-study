@@ -14,6 +14,9 @@ interface CloudflareEnv {
   /** Worker self-reference for internal routing */
   WORKER_SELF_REFERENCE: Fetcher;
 
+  /** Summarizer Worker via Service Binding */
+  SUMMARIZER: Fetcher;
+
   /** Static assets binding */
   ASSETS: Fetcher;
 }

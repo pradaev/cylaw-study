@@ -183,8 +183,15 @@ function calculateCost(
 
 function formatApiError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
-  // Always log the raw error for debugging
-  console.error("[LLM] API error:", message);
+  const stack = err instanceof Error ? err.stack : undefined;
+  // Always log full error with session context
+  console.error(JSON.stringify({
+    event: "error",
+    sessionId: _sessionId,
+    userEmail: _userEmail,
+    error: message,
+    stack: stack?.slice(0, 500),
+  }));
   if (message.includes("maximum context length")) return "The search returned too many documents. Try a more specific query.";
   if (message.includes("rate_limit") || message.includes("429")) return "The AI service is temporarily overloaded. Please wait and try again.";
   if (message.includes("timeout") || message.includes("ETIMEDOUT")) return "The request timed out. Please try again.";
@@ -377,6 +384,7 @@ Document ID: ${docId}`;
 let _fetchDocumentFn: FetchDocumentFn | null = null;
 let _lastUserQuery = "";
 let _sessionId = "unknown";
+let _userEmail = "anonymous";
 
 export function setFetchDocumentFn(fn: FetchDocumentFn) {
   _fetchDocumentFn = fn;
@@ -388,6 +396,10 @@ export function setLastUserQuery(query: string) {
 
 export function setSessionId(id: string) {
   _sessionId = id;
+}
+
+export function setUserEmail(email: string) {
+  _userEmail = email;
 }
 
 /**
@@ -426,52 +438,104 @@ async function handleSearch(
 }
 
 /**
- * Phase 2: Summarize all collected documents in one batch.
- * Called AFTER all searches complete. Each summary emitted to UI immediately.
+ * Phase 2: Summarize all collected documents.
+ * Production: uses Summarizer Worker via Service Binding (each call = fresh connection pool).
+ * Dev: falls back to direct OpenAI calls.
  */
 async function summarizeAllDocs(
   client: OpenAI,
   docs: SearchResult[],
   emit: (event: SSEYield) => void,
+  summarizerBinding?: Fetcher,
 ): Promise<{ inputTokens: number; outputTokens: number; count: number }> {
-  const fetchDoc = _fetchDocumentFn;
-  if (!fetchDoc || docs.length === 0) {
+  if (docs.length === 0) {
     return { inputTokens: 0, outputTokens: 0, count: 0 };
   }
 
   emit({ event: "summarizing", data: { count: docs.length, focus: _lastUserQuery } });
 
-  const CONCURRENCY = 5;
-  const focus = _lastUserQuery;
   let totalIn = 0;
   let totalOut = 0;
   let summarized = 0;
 
-  for (let i = 0; i < docs.length; i += CONCURRENCY) {
-    const batch = docs.slice(i, i + CONCURRENCY);
-    await Promise.all(
-      batch.map(async (r) => {
-        const text = await fetchDoc(r.doc_id);
-        if (!text) return;
-        const result = await summarizeDocument(client, r.doc_id, text, focus, _lastUserQuery);
-        if (result) {
+  if (summarizerBinding) {
+    // Production: send batches of 5 to Summarizer Worker via Service Binding
+    // Each call = new request = fresh 6-connection pool
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < docs.length; i += BATCH_SIZE) {
+      const batch = docs.slice(i, i + BATCH_SIZE);
+      try {
+        const res = await summarizerBinding.fetch("https://summarizer/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            docIds: batch.map((d) => d.doc_id),
+            userQuery: _lastUserQuery,
+            focus: _lastUserQuery,
+            openaiApiKey: process.env.OPENAI_API_KEY,
+          }),
+        });
+
+        if (!res.ok) {
+          console.error("[Summarizer] Batch error:", await res.text());
+          continue;
+        }
+
+        const data = await res.json() as {
+          results: Array<{
+            docId: string;
+            summary: string;
+            relevance: string;
+            court: string;
+            year: number;
+            inputTokens: number;
+            outputTokens: number;
+          }>;
+        };
+
+        for (const result of data.results) {
           totalIn += result.inputTokens;
           totalOut += result.outputTokens;
           summarized++;
-          // Send each summary to UI immediately
           emit({ event: "summaries", data: [{ docId: result.docId, summary: result.summary }] });
         }
-      }),
-    );
+      } catch (err) {
+        console.error("[Summarizer] Service binding error:", err instanceof Error ? err.message : err);
+      }
+    }
+  } else {
+    // Dev fallback: direct OpenAI calls (same as before)
+    const fetchDoc = _fetchDocumentFn;
+    if (!fetchDoc) return { inputTokens: 0, outputTokens: 0, count: 0 };
+
+    const CONCURRENCY = 3;
+    for (let i = 0; i < docs.length; i += CONCURRENCY) {
+      const batch = docs.slice(i, i + CONCURRENCY);
+      await Promise.all(
+        batch.map(async (r) => {
+          const text = await fetchDoc(r.doc_id);
+          if (!text) return;
+          const result = await summarizeDocument(client, r.doc_id, text, _lastUserQuery, _lastUserQuery);
+          if (result) {
+            totalIn += result.inputTokens;
+            totalOut += result.outputTokens;
+            summarized++;
+            emit({ event: "summaries", data: [{ docId: result.docId, summary: result.summary }] });
+          }
+        }),
+      );
+    }
   }
 
   console.log(JSON.stringify({
     event: "summarize_batch",
     sessionId: _sessionId,
+    userEmail: _userEmail,
     totalDocs: docs.length,
     summarized,
     inputTokens: totalIn,
     outputTokens: totalOut,
+    viaServiceBinding: !!summarizerBinding,
   }));
 
   return { inputTokens: totalIn, outputTokens: totalOut, count: summarized };
@@ -483,6 +547,7 @@ export function chatStream(
   messages: ChatMessage[],
   modelKey: string,
   searchFn: SearchFn,
+  summarizerBinding?: Fetcher,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const modelCfg = MODELS[modelKey];
@@ -511,9 +576,9 @@ export function chatStream(
       try {
         const system = getSystem();
         if (modelCfg.provider === "openai") {
-          await streamOpenAI(messages, modelCfg, system, searchFn, emit);
+          await streamOpenAI(messages, modelCfg, system, searchFn, emit, summarizerBinding);
         } else {
-          await streamClaude(messages, modelCfg, system, searchFn, emit);
+          await streamClaude(messages, modelCfg, system, searchFn, emit, summarizerBinding);
         }
       } catch (err) {
         emit({ event: "error", data: formatApiError(err) });
@@ -532,6 +597,7 @@ async function streamOpenAI(
   system: string,
   searchFn: SearchFn,
   emit: (event: SSEYield) => void,
+  summarizerBinding?: Fetcher,
 ) {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -616,7 +682,7 @@ async function streamOpenAI(
   }
 
   // Phase 2: Summarize all found docs in one batch
-  const summarizerResult = await summarizeAllDocs(client, allFoundDocs, emit);
+  const summarizerResult = await summarizeAllDocs(client, allFoundDocs, emit, summarizerBinding);
 
   // Final sources emit
   if (allSources.length > 0) {
@@ -631,6 +697,7 @@ async function streamOpenAI(
   console.log(JSON.stringify({
     event: "chat_complete",
     sessionId: _sessionId,
+    userEmail: _userEmail,
     provider: "openai",
     model: modelCfg.label,
     mainInputTokens: totalInputTokens,
@@ -667,6 +734,7 @@ async function streamClaude(
   system: string,
   searchFn: SearchFn,
   emit: (event: SSEYield) => void,
+  summarizerBinding?: Fetcher,
 ) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -754,7 +822,7 @@ async function streamClaude(
   }
 
   // Phase 2: Summarize all found docs in one batch
-  const summarizerResult = await summarizeAllDocs(openaiClient, allFoundDocs, emit);
+  const summarizerResult = await summarizeAllDocs(openaiClient, allFoundDocs, emit, summarizerBinding);
 
   // Final sources emit
   if (allSources.length > 0) emit({ event: "sources", data: allSources });
@@ -767,6 +835,7 @@ async function streamClaude(
   console.log(JSON.stringify({
     event: "chat_complete",
     sessionId: _sessionId,
+    userEmail: _userEmail,
     provider: "anthropic",
     model: modelCfg.label,
     mainInputTokens: totalInputTokens,

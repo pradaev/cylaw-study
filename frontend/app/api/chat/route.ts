@@ -13,7 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { chatStream, setFetchDocumentFn, setSessionId } from "@/lib/llm-client";
+import { chatStream, setFetchDocumentFn, setSessionId, setUserEmail } from "@/lib/llm-client";
 import { localFetchDocument } from "@/lib/local-retriever";
 import { createVectorizeSearchFn } from "@/lib/retriever";
 import { createBindingClient, createHttpClient } from "@/lib/vectorize-client";
@@ -158,17 +158,22 @@ export async function POST(request: NextRequest) {
   const model = body.model ?? "gpt-4o";
   const sessionId = body.sessionId ?? "unknown";
 
+  // Get authenticated user email from Cloudflare Zero Trust
+  const userEmail = request.headers.get("Cf-Access-Authenticated-User-Email") ?? "anonymous";
+
   if (messages.length === 0) {
     return NextResponse.json({ error: "No messages" }, { status: 400 });
   }
 
   // Set session context for structured logging
   setSessionId(sessionId);
+  setUserEmail(userEmail);
 
   const userQuery = messages[messages.length - 1]?.content ?? "";
   console.log(JSON.stringify({
     event: "chat_request",
     sessionId,
+    userEmail,
     model,
     messageCount: messages.length,
     queryLength: userQuery.length,
@@ -184,7 +189,20 @@ export async function POST(request: NextRequest) {
         return createBindingClient(ctx.env as unknown as CloudflareEnv);
       })();
   const searchFn = createVectorizeSearchFn(vectorizeClient);
-  const stream = chatStream(messages, model, searchFn);
+
+  // Get Summarizer binding in production (Service Binding = fresh connection pool per call)
+  let summarizerBinding: Fetcher | undefined;
+  if (!isDev) {
+    try {
+      const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+      const ctx = await getCloudflareContext({ async: true });
+      summarizerBinding = (ctx.env as unknown as CloudflareEnv).SUMMARIZER;
+    } catch {
+      // No binding available — will fall back to direct calls
+    }
+  }
+
+  const stream = chatStream(messages, model, searchFn, summarizerBinding);
 
   return new Response(stream, {
     headers: {

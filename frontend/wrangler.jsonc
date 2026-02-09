@@ -12,6 +12,10 @@
     {
       "binding": "WORKER_SELF_REFERENCE",
       "service": "cyprus-case-law"
+    },
+    {
+      "binding": "SUMMARIZER",
+      "service": "cylaw-summarizer"
     }
   ],
   "r2_buckets": [
