@@ -412,6 +412,7 @@ const RERANK_MODEL = "gpt-4o-mini";
 const RERANK_MIN_SCORE = 4;           // 0-10 scale; keep docs scoring >= 4
 const RERANK_MAX_DOCS_IN = 90;        // max docs to send to reranker (3 searches × 30 docs)
 const RERANK_BATCH_SIZE = 20;         // score in batches of 20 to prevent attention degradation
+const MAX_SUMMARIZE_DOCS = 20;        // hard cap: max docs to send to GPT-4o summarizer
 const RERANK_HEAD_CHARS = 300;        // chars from document head (title, parties)
 const RERANK_DECISION_CHARS = 600;    // chars from start of decision text
 const RERANK_TAIL_CHARS = 800;        // chars from end (ruling/conclusion)
@@ -592,18 +593,26 @@ ${docList}`;
     }
   }
 
-  // 3. Filter: keep docs with score >= threshold
-  const kept: SearchResult[] = [];
+  // 3. Filter: keep docs with score >= threshold, sorted by reranker score (desc)
+  const scored: { doc: SearchResult; rerankScore: number }[] = [];
   const dropped: string[] = [];
   for (const p of previews) {
     const score = allScores.get(p.idx) ?? 0;
     if (score >= RERANK_MIN_SCORE) {
       const original = docsToRerank[p.idx];
-      if (original) kept.push(original);
+      if (original) scored.push({ doc: original, rerankScore: score });
     } else {
       dropped.push(p.docId);
     }
   }
+
+  // Sort by reranker score (desc), then vector score (desc) as tiebreaker
+  scored.sort((a, b) => b.rerankScore - a.rerankScore || (b.doc.score ?? 0) - (a.doc.score ?? 0));
+
+  // Cap at MAX_SUMMARIZE_DOCS to prevent excessive summarization time
+  const cappedCount = Math.min(scored.length, MAX_SUMMARIZE_DOCS);
+  const kept = scored.slice(0, cappedCount).map((s) => s.doc);
+  const cappedDocs = scored.length - cappedCount;
 
   // Build score details for logging and SSE
   const scoreDetails = previews.map((p) => ({
@@ -618,12 +627,21 @@ ${docList}`;
     userEmail: _userEmail,
     inputDocs: previews.length,
     batches: Math.ceil(previews.length / RERANK_BATCH_SIZE),
-    kept: kept.length,
+    keptByScore: scored.length,
+    cappedTo: cappedCount,
     dropped: dropped.length,
     minScore: RERANK_MIN_SCORE,
     inputTokens: totalInputTokens,
     outputTokens: totalOutputTokens,
   }));
+
+  if (cappedDocs > 0) {
+    console.log(JSON.stringify({
+      event: "rerank_capped",
+      droppedByCap: cappedDocs,
+      maxSummarizeDocs: MAX_SUMMARIZE_DOCS,
+    }));
+  }
 
   // Emit reranker results via SSE for diagnostics
   if (emit) {
@@ -633,6 +651,7 @@ ${docList}`;
         inputDocs: previews.length,
         keptCount: kept.length,
         droppedCount: dropped.length,
+        cappedFrom: scored.length,
         threshold: RERANK_MIN_SCORE,
         scores: scoreDetails,
       },
@@ -740,6 +759,10 @@ async function summarizeAllDocs(
     const BATCH_SIZE = 5;
     for (let i = 0; i < docs.length; i += BATCH_SIZE) {
       const batch = docs.slice(i, i + BATCH_SIZE);
+
+      // Emit progress to keep SSE connection alive and inform the UI
+      emit({ event: "summarizing", data: { count: docs.length, progress: i, focus: _lastUserQuery } });
+
       try {
         const res = await summarizerBinding.fetch("https://summarizer/", {
           method: "POST",
@@ -780,13 +803,17 @@ async function summarizeAllDocs(
       }
     }
   } else {
-    // Dev fallback: direct OpenAI calls (same as before)
+    // Dev fallback: direct OpenAI calls with higher concurrency
     const fetchDoc = _fetchDocumentFn;
     if (!fetchDoc) return { inputTokens: 0, outputTokens: 0, count: 0 };
 
-    const CONCURRENCY = 3;
+    const CONCURRENCY = 5;
     for (let i = 0; i < docs.length; i += CONCURRENCY) {
       const batch = docs.slice(i, i + CONCURRENCY);
+
+      // Emit progress to keep SSE connection alive
+      emit({ event: "summarizing", data: { count: docs.length, progress: i, focus: _lastUserQuery } });
+
       await Promise.all(
         batch.map(async (r) => {
           const text = await fetchDoc(r.doc_id);

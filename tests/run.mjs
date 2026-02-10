@@ -65,6 +65,12 @@ const E2E_TESTS = [
     cwd: ROOT,
     envRequired: ["OPENAI_API_KEY"],
   },
+  {
+    name: "Pipeline Quality & Timing",
+    cmd: `node tests/pipeline.test.mjs${VERBOSE ? " --verbose" : ""}`,
+    cwd: ROOT,
+    envRequired: ["OPENAI_API_KEY"],
+  },
 ];
 
 // ── Runner ─────────────────────────────────────────────
