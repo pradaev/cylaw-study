@@ -50,6 +50,7 @@ async function runQuery(q) {
   const profile = {
     searches: [],
     sources: [],
+    reranked: null,
     summarized: 0,
     summaryBatches: [],
     summaries: [],
@@ -82,6 +83,10 @@ async function runQuery(q) {
           }
           case "sources": {
             profile.sources = JSON.parse(data);
+            break;
+          }
+          case "reranked": {
+            profile.reranked = JSON.parse(data);
             break;
           }
           case "summarizing": {
@@ -262,6 +267,23 @@ async function main() {
   for (const [year, count] of yearEntries) {
     const bar = "█".repeat(count);
     console.log(`    ${pad(year, 20)} ${padL(count, 3)}  ${bar}`);
+  }
+
+  // ── 3b. RERANKER RESULTS ────────────────────────────
+
+  if (profile.reranked) {
+    printSection(`2b. RERANKER (${profile.reranked.inputDocs} in → ${profile.reranked.keptCount} kept, threshold ≥${profile.reranked.threshold})`);
+
+    if (profile.reranked.scores) {
+      const scoreSorted = [...profile.reranked.scores].sort((a, b) => b.rerank_score - a.rerank_score);
+      console.log(`\n  ${pad("Score", 7)} ${pad("Kept?", 7)} ${pad("Doc ID", 80)}`);
+      console.log(`  ${pad("─", 7)} ${pad("─", 7)} ${pad("─", 80)}`);
+
+      for (const s of scoreSorted) {
+        const status = s.kept ? "✅" : "❌";
+        console.log(`  ${pad(s.rerank_score, 7)} ${pad(status, 7)} ${s.doc_id?.slice(0, 80) ?? "—"}`);
+      }
+    }
   }
 
   // ── 4. SUMMARIZATION RESULTS ─────────────────────────

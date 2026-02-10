@@ -30,8 +30,9 @@
 ## Current Problems
 
 - **OpenAI 800K TPM** — parallel batches can hit rate limit, some docs fail. User can retry.
-- **Hit rate ~14%** — Improved from 2% (baseline) → 4% (query diversification) → 14% (reranker). Still 86% NONE after summarization. Root cause: embedding model clusters scores in tight 0.42-0.52 band.
+- **Hit rate ~20%** — Improved from 2% → 4% → 14% → 20%. Reranker now in batches of 20, Subject-line extraction, legal_context enrichment. Still 80% NONE after summarization.
 - **Embedding quality** — `text-embedding-3-small` finds similar words, not relevant cases. Hybrid search (BM25 + vector) is next step.
+- **Summarizer false positives** — C-category docs sometimes rated HIGH (domestic property cases). Summarizer prompt needs tighter relevance criteria.
 
 ## What's Next
 
@@ -55,7 +56,7 @@
 ### Architecture
 - **Service Binding** — each batch of 5 docs = separate call = fresh connection pool
 - **Three-phase pipeline** — LLM searches → GPT-4o-mini reranks → GPT-4o summarizes. Source cards ARE the answer.
-- **Reranker** — reads first 600 chars per doc, scores 0-10 in one batch call, keeps >= 4. Cost ~$0.003.
+- **Reranker** — reads head+Subject+decision+tail preview per doc, scores in batches of 20, keeps >= 4. Cost ~$0.005.
 - **Summarizer prompt in English** — output in Greek, instructions in English (fewer hallucinations)
 
 ### Technical
@@ -86,29 +87,29 @@
 | `npm run test:e2e` | Full pipeline E2E (~$5-10) | Architecture changes |
 | `node scripts/compare_indexes.mjs` | Compare old vs new index | After re-embedding |
 | `node scripts/deep_dive_query.mjs` | Full pipeline diagnostic for one query | Debug search quality |
+| `node scripts/pipeline_stage_test.mjs` | Stage-by-stage ground-truth check | Search quality experiments |
 
 ## Last Session Log
+
+### 2026-02-10 (session 9 — search quality experiment framework + reranker fix)
+- Created `docs/SEARCH_QUALITY_EXPERIMENT.md` — repeatable test case with 13 ground-truth docs, methodology, success criteria
+- Created `scripts/pipeline_stage_test.mjs` — stage-by-stage diagnostic (vector search, reranker, summarizer)
+- Diagnosed filtering at each stage: vector search misses A4/B5, reranker dropped A3, summarizer too strict on B-docs
+- **Critical fix**: batch reranking (20 docs/batch) — sending 60+ docs in one call caused GPT-4o-mini attention degradation
+- Added Subject-line extraction to reranker preview — improved A3 detection
+- Sort `allFoundDocs` by score before reranking so best candidates always get evaluated
+- Enriched summarizer `focus` with `legal_context` from LLM tool calls
+- Added `reranked` SSE event with per-doc scores for observability
+- Results: A3 (key EU Reg 2016/1103 case) now found as HIGH; hit rate 14% → 20%
 
 ### 2026-02-09 (session 8 — search quality: score threshold + reranker)
 - Added score threshold in `retriever.ts`: MIN_SCORE=0.42, adaptive drop at 75% of best match
 - Added GPT-4o-mini reranker in `llm-client.ts`: reads 600 chars, scores 0-10, keeps >= 4
 - Test results: 48 docs → 22 reranked → 3 kept (14% hit rate), cost $1.16, time 144s
-- Comparison: baseline 4% / $2.33 / 328s → with reranker 14% / $1.16 / 144s
 
 ### 2026-02-09 (session 7 — LLM query diversification + doc audit)
 - Fixed 24 stale references in 11 files (index names, pipeline commands, areiospagos classification)
-- Implemented LLM search query diversification in `buildSystemPrompt()`: facet-based strategy, keyword overlap constraint, anti-pattern/worked examples, strengthened legal_context
+- Implemented LLM search query diversification in `buildSystemPrompt()`: facet-based strategy
 - Deep-dive diagnostic: hit rate improved 2% → 4% on niche foreign-law query
-
-### 2026-02-09 (session 6 — vectorize re-embedding overhaul)
-- Implemented full re-embedding pipeline: chunker overhaul (contextual headers, jurisdiction extraction, ΑΝΑΦΟΡΕΣ stripping, markdown/C1 cleaning, tail merge)
-- Reclassified areiospagos → `court_level=foreign` in chunker, llm-client, retriever
-- Created new Vectorize index `cyprus-law-cases-search-revised` with jurisdiction metadata
-- Refactored batch_ingest.py: separate `create-index`, `submit`, `download`, `upload` commands
-- Uploaded 2,071,079 vectors (42 batches, 0 failures)
-- Index comparison: areiospagos no longer pollutes results, jurisdiction metadata populated
-- Deep-dive diagnostic: 2% hit rate on niche query — identified LLM query diversification as next improvement
-- Added retry logic + reduced parallelism for OpenAI file downloads
-- Created comparison (`scripts/compare_indexes.mjs`) and diagnostic (`scripts/deep_dive_query.mjs`) tools
 
 

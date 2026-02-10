@@ -177,7 +177,7 @@ export type SearchFn = (
 export type FetchDocumentFn = (docId: string) => Promise<string | null>;
 
 interface SSEYield {
-  event: "searching" | "sources" | "summarizing" | "summaries" | "token" | "done" | "error" | "usage";
+  event: "searching" | "sources" | "reranked" | "summarizing" | "summaries" | "token" | "done" | "error" | "usage";
   data: unknown;
 }
 
@@ -410,27 +410,94 @@ Document ID: ${docId}`;
 
 const RERANK_MODEL = "gpt-4o-mini";
 const RERANK_MIN_SCORE = 4;           // 0-10 scale; keep docs scoring >= 4
-const RERANK_MAX_DOCS_IN = 60;        // max docs to send to reranker
-const RERANK_PREVIEW_CHARS = 600;     // chars to read from each doc for preview
+const RERANK_MAX_DOCS_IN = 90;        // max docs to send to reranker (3 searches × 30 docs)
+const RERANK_BATCH_SIZE = 20;         // score in batches of 20 to prevent attention degradation
+const RERANK_HEAD_CHARS = 300;        // chars from document head (title, parties)
+const RERANK_DECISION_CHARS = 600;    // chars from start of decision text
+const RERANK_TAIL_CHARS = 800;        // chars from end (ruling/conclusion)
+const RERANK_TAIL_SKIP = 200;         // chars to skip from very end (signatures/costs)
 
 /**
- * Lightweight reranker: read first N chars of each doc, send all previews
- * in one GPT-4o-mini call, keep only docs scoring >= RERANK_MIN_SCORE.
+ * Extract a smart preview: title + subject + start of decision + conclusion/ruling.
  *
- * Cost: ~$0.002-0.005 per call (vs ~$1.50 for full summarization of all docs).
+ * Cypriot docs have structure: title → ΑΝΑΦΟΡΕΣ (cross-refs) → ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ → decision.
+ * The ΑΝΑΦΟΡΕΣ section is noise for relevance scoring. We grab:
+ *   1. First ~300 chars (title, parties, metadata)
+ *   2. Subject line if present (e.g., "Subject: Δικαιοδοσία ... / Ε.Κ 1103/2016")
+ *   3. First ~600 chars after ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ marker (court name, jurisdiction type)
+ *   4. ~800 chars from near the end (ruling/conclusion, skip last 200 for signatures)
+ *
+ * For docs without the marker (areiospagos, jsc), we take head + subject + tail.
+ */
+function buildRerankPreview(text: string): string {
+  const head = text.slice(0, RERANK_HEAD_CHARS);
+
+  // Extract Subject line if present (~5800 docs have it) — strong topical signal
+  let subjectLine = "";
+  const subjectMatch = text.match(/Subject:\s*(.+)/);
+  if (subjectMatch) {
+    subjectLine = `[SUBJECT: ${subjectMatch[1].trim()}]`;
+  }
+
+  // Tail: court's conclusion/ruling (skip signatures and cost allocation at very end)
+  const tailEnd = Math.max(0, text.length - RERANK_TAIL_SKIP);
+  const tailStart = Math.max(0, tailEnd - RERANK_TAIL_CHARS);
+  const tail = tailStart > RERANK_HEAD_CHARS
+    ? text.slice(tailStart, tailEnd)
+    : "";
+
+  const marker = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ";
+  const markerIdx = text.indexOf(marker);
+
+  if (markerIdx === -1) {
+    // No marker (areiospagos, jsc, rscc) — head + subject + tail
+    const parts = [head];
+    if (subjectLine) parts.push(subjectLine);
+    if (tail) {
+      parts.push("\n[...]\n", tail);
+    } else {
+      return text.slice(0, RERANK_HEAD_CHARS + RERANK_DECISION_CHARS + RERANK_TAIL_CHARS);
+    }
+    return parts.join("\n");
+  }
+
+  // Skip the marker itself and any trailing `:` or `*`
+  let decisionStart = markerIdx + marker.length;
+  while (decisionStart < text.length && /[:\s*]/.test(text[decisionStart])) {
+    decisionStart++;
+  }
+
+  const decisionPreview = text.slice(decisionStart, decisionStart + RERANK_DECISION_CHARS);
+
+  const parts = [head];
+  if (subjectLine) parts.push(subjectLine);
+  parts.push("\n[...ΑΝΑΦΟΡΕΣ omitted...]\n", decisionPreview);
+  if (tail) {
+    parts.push("\n[...middle omitted...]\n", tail);
+  }
+
+  return parts.join("");
+}
+
+/**
+ * Lightweight reranker: read title + start of decision for each doc,
+ * send all previews in one GPT-4o-mini call, keep only docs scoring >= RERANK_MIN_SCORE.
+ *
+ * Cost: ~$0.003-0.008 per call (vs ~$1.50 for full summarization of all docs).
  */
 async function rerankDocs(
   client: OpenAI,
   docs: SearchResult[],
   userQuery: string,
   fetchDoc: FetchDocumentFn,
+  emit?: (event: SSEYield) => void,
 ): Promise<SearchResult[]> {
   if (docs.length === 0) return [];
   if (docs.length <= 3) return docs; // too few to bother reranking
 
   const docsToRerank = docs.slice(0, RERANK_MAX_DOCS_IN);
 
-  // 1. Fetch preview (first N chars) for each doc
+  // 1. Fetch smart preview (title + decision start) for each doc
   const previews: { idx: number; docId: string; preview: string }[] = [];
 
   // Fetch in parallel batches of 5
@@ -443,7 +510,7 @@ async function rerankDocs(
         return {
           idx: i + batchIdx,
           docId: doc.doc_id,
-          preview: text.slice(0, RERANK_PREVIEW_CHARS),
+          preview: buildRerankPreview(text),
         };
       }),
     );
@@ -454,22 +521,39 @@ async function rerankDocs(
 
   if (previews.length === 0) return docs;
 
-  // 2. Build prompt: ask GPT-4o-mini to score each preview 0-10
-  const docList = previews
-    .map((p) => `[DOC_${p.idx}] ${p.docId}\n${p.preview}`)
-    .join("\n---\n");
+  // 2. Score in batches of RERANK_BATCH_SIZE to prevent attention degradation
+  //    Large batches (60+) cause GPT-4o-mini to lose calibration and score everything low.
+  const allScores = new Map<number, number>();
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
 
-  const rerankPrompt = `You are a legal relevance scorer. The user's research question is:
+  for (let batchStart = 0; batchStart < previews.length; batchStart += RERANK_BATCH_SIZE) {
+    const batch = previews.slice(batchStart, batchStart + RERANK_BATCH_SIZE);
+
+    // Use LOCAL indices (0..N-1) in the prompt so GPT-4o-mini always returns 0-based idx
+    const docList = batch
+      .map((p, localIdx) => `[DOC_${localIdx}] ${p.docId}\n${p.preview}`)
+      .join("\n---\n");
+
+    const rerankPrompt = `You are a legal relevance scorer for Cypriot court decisions. The user's research question is:
 "${userQuery}"
 
-Below are ${previews.length} document previews (first ~500 chars each). Score each document's likely relevance to the research question on a 0-10 scale:
-- 0-1: Completely unrelated topic
-- 2-3: Same area of law but different legal issue
-- 4-5: Related legal issue, might contain useful references
-- 6-7: Directly addresses the topic
-- 8-10: Core case on this exact legal question
+Below are ${batch.length} document previews. Each preview shows THREE parts:
+1. TITLE/HEADER (case name, parties, date)
+2. DECISION OPENING (court name, jurisdiction type, first paragraphs after ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ)
+3. CONCLUSION/RULING (the court's actual ruling from near the end of the document)
 
-CRITICAL: Base scores ONLY on the preview text. Do NOT assume content beyond what is shown.
+Score each document's likely relevance on a 0-10 scale:
+- 0-1: Completely unrelated topic (different area of law entirely)
+- 2-3: Same area of law but different legal issue
+- 4-5: Related legal issue, might contain useful references or dicta
+- 6-7: Directly addresses the topic — court analyzed this specific legal question
+- 8-10: Core case — court ruled on this exact legal question
+
+SCORING TIPS:
+- The CONCLUSION section is most informative — it shows what the court actually decided
+- The JURISDICTION TYPE (e.g., ΠΕΡΙΟΥΣΙΑΚΩΝ ΔΙΑΦΟΡΩΝ, ΟΙΚΟΓΕΝΕΙΑΚΗ) is a strong signal
+- If you see legal terms/statutes from the query mentioned in the conclusion, score higher
 
 Respond with ONLY a JSON array of objects: [{"idx": 0, "score": 5}, {"idx": 1, "score": 2}, ...]
 No explanation, no markdown fencing, just the JSON array.
@@ -477,68 +561,98 @@ No explanation, no markdown fencing, just the JSON array.
 Documents:
 ${docList}`;
 
-  try {
-    const response = await client.chat.completions.create({
-      model: RERANK_MODEL,
-      messages: [{ role: "user", content: rerankPrompt }],
-      temperature: 0,
-      max_tokens: 2000,
-    });
+    try {
+      const response = await client.chat.completions.create({
+        model: RERANK_MODEL,
+        messages: [{ role: "user", content: rerankPrompt }],
+        temperature: 0,
+        max_tokens: 2000,
+      });
 
-    const rawOutput = response.choices[0]?.message?.content ?? "[]";
-    // Extract JSON array even if wrapped in markdown code fences
-    const jsonMatch = rawOutput.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      console.log(JSON.stringify({ event: "rerank_parse_error", raw: rawOutput.slice(0, 200) }));
-      return docs; // fallback: no filtering
-    }
+      totalInputTokens += response.usage?.prompt_tokens ?? 0;
+      totalOutputTokens += response.usage?.completion_tokens ?? 0;
 
-    const scores: { idx: number; score: number }[] = JSON.parse(jsonMatch[0]);
-    const scoreMap = new Map(scores.map((s) => [s.idx, s.score]));
-
-    // 3. Filter: keep docs with score >= threshold
-    const kept: SearchResult[] = [];
-    const dropped: string[] = [];
-    for (const p of previews) {
-      const score = scoreMap.get(p.idx) ?? 0;
-      if (score >= RERANK_MIN_SCORE) {
-        const original = docsToRerank[p.idx];
-        if (original) kept.push(original);
-      } else {
-        dropped.push(p.docId);
+      const rawOutput = response.choices[0]?.message?.content ?? "[]";
+      const jsonMatch = rawOutput.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        console.log(JSON.stringify({ event: "rerank_parse_error", batch: batchStart, raw: rawOutput.slice(0, 200) }));
+        continue;
       }
+
+      const scores: { idx: number; score: number }[] = JSON.parse(jsonMatch[0]);
+      // Map LOCAL batch idx back to GLOBAL preview idx
+      for (const s of scores) {
+        if (s.idx >= 0 && s.idx < batch.length) {
+          allScores.set(batch[s.idx].idx, s.score);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(JSON.stringify({ event: "rerank_batch_error", batch: batchStart, error: msg }));
     }
-
-    console.log(JSON.stringify({
-      event: "rerank_complete",
-      sessionId: _sessionId,
-      userEmail: _userEmail,
-      inputDocs: previews.length,
-      kept: kept.length,
-      dropped: dropped.length,
-      minScore: RERANK_MIN_SCORE,
-      inputTokens: response.usage?.prompt_tokens ?? 0,
-      outputTokens: response.usage?.completion_tokens ?? 0,
-    }));
-
-    // If reranker would drop ALL docs, keep top 5 as fallback
-    if (kept.length === 0) {
-      console.log(JSON.stringify({ event: "rerank_fallback", reason: "all_dropped" }));
-      return docsToRerank.slice(0, 5);
-    }
-
-    return kept;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.log(JSON.stringify({ event: "rerank_error", error: msg }));
-    return docs; // on error, fall back to unfiltered
   }
+
+  // 3. Filter: keep docs with score >= threshold
+  const kept: SearchResult[] = [];
+  const dropped: string[] = [];
+  for (const p of previews) {
+    const score = allScores.get(p.idx) ?? 0;
+    if (score >= RERANK_MIN_SCORE) {
+      const original = docsToRerank[p.idx];
+      if (original) kept.push(original);
+    } else {
+      dropped.push(p.docId);
+    }
+  }
+
+  // Build score details for logging and SSE
+  const scoreDetails = previews.map((p) => ({
+    doc_id: p.docId,
+    rerank_score: allScores.get(p.idx) ?? 0,
+    kept: (allScores.get(p.idx) ?? 0) >= RERANK_MIN_SCORE,
+  }));
+
+  console.log(JSON.stringify({
+    event: "rerank_complete",
+    sessionId: _sessionId,
+    userEmail: _userEmail,
+    inputDocs: previews.length,
+    batches: Math.ceil(previews.length / RERANK_BATCH_SIZE),
+    kept: kept.length,
+    dropped: dropped.length,
+    minScore: RERANK_MIN_SCORE,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+  }));
+
+  // Emit reranker results via SSE for diagnostics
+  if (emit) {
+    emit({
+      event: "reranked",
+      data: {
+        inputDocs: previews.length,
+        keptCount: kept.length,
+        droppedCount: dropped.length,
+        threshold: RERANK_MIN_SCORE,
+        scores: scoreDetails,
+      },
+    });
+  }
+
+  // If reranker would drop ALL docs, keep top 5 as fallback
+  if (kept.length === 0) {
+    console.log(JSON.stringify({ event: "rerank_fallback", reason: "all_dropped" }));
+    return docsToRerank.slice(0, 5);
+  }
+
+  return kept;
 }
 
 // ── Search + Summarize Handler ─────────────────────────
 
 let _fetchDocumentFn: FetchDocumentFn | null = null;
 let _lastUserQuery = "";
+let _legalContext = "";      // rich context from LLM tool calls (laws, regulations, case names)
 let _sessionId = "unknown";
 let _userEmail = "anonymous";
 
@@ -548,6 +662,7 @@ export function setFetchDocumentFn(fn: FetchDocumentFn) {
 
 export function setLastUserQuery(query: string) {
   _lastUserQuery = query;
+  _legalContext = "";  // reset per conversation turn
 }
 
 export function setSessionId(id: string) {
@@ -608,6 +723,11 @@ async function summarizeAllDocs(
     return { inputTokens: 0, outputTokens: 0, count: 0 };
   }
 
+  // Enrich focus with legal context from LLM tool calls (laws, regulations, key terms)
+  const summarizerFocus = _legalContext
+    ? `${_lastUserQuery}\n\nΝομικό πλαίσιο: ${_legalContext}`
+    : _lastUserQuery;
+
   emit({ event: "summarizing", data: { count: docs.length, focus: _lastUserQuery } });
 
   let totalIn = 0;
@@ -627,7 +747,7 @@ async function summarizeAllDocs(
           body: JSON.stringify({
             docIds: batch.map((d) => d.doc_id),
             userQuery: _lastUserQuery,
-            focus: _lastUserQuery,
+            focus: summarizerFocus,
             openaiApiKey: process.env.OPENAI_API_KEY,
           }),
         });
@@ -671,7 +791,7 @@ async function summarizeAllDocs(
         batch.map(async (r) => {
           const text = await fetchDoc(r.doc_id);
           if (!text) return;
-          const result = await summarizeDocument(client, r.doc_id, text, _lastUserQuery, _lastUserQuery);
+          const result = await summarizeDocument(client, r.doc_id, text, summarizerFocus, _lastUserQuery);
           if (result) {
             totalIn += result.inputTokens;
             totalOut += result.outputTokens;
@@ -794,6 +914,12 @@ async function streamOpenAI(
 
         if (toolCall.function.name === "search_cases") {
           searchStep++;
+          // Capture legal_context from LLM — accumulate across searches for richer summarizer focus
+          if (args.legal_context && args.legal_context !== _legalContext) {
+            _legalContext = _legalContext
+              ? `${_legalContext}; ${args.legal_context}`
+              : args.legal_context;
+          }
           emit({
             event: "searching",
             data: {
@@ -837,11 +963,14 @@ async function streamOpenAI(
     break;
   }
 
+  // Sort by vector score (desc) so reranker evaluates best candidates first
+  allFoundDocs.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
   // Phase 1.5: Lightweight rerank — filter out likely-irrelevant docs before expensive summarization
   const fetchDoc = _fetchDocumentFn;
   let docsToSummarize = allFoundDocs;
   if (fetchDoc && allFoundDocs.length > 3) {
-    docsToSummarize = await rerankDocs(client, allFoundDocs, _lastUserQuery, fetchDoc);
+    docsToSummarize = await rerankDocs(client, allFoundDocs, _lastUserQuery, fetchDoc, emit);
   }
 
   // Phase 2: Summarize only reranked docs
@@ -943,6 +1072,11 @@ async function streamClaude(
 
         if (toolUse.name === "search_cases") {
           searchStep++;
+          // Capture legal_context from LLM
+          const lc = args.legal_context as string | undefined;
+          if (lc && lc !== _legalContext) {
+            _legalContext = _legalContext ? `${_legalContext}; ${lc}` : lc;
+          }
           emit({
             event: "searching",
             data: {
@@ -986,11 +1120,14 @@ async function streamClaude(
     break;
   }
 
+  // Sort by vector score (desc) so reranker evaluates best candidates first
+  allFoundDocs.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
   // Phase 1.5: Lightweight rerank — filter out likely-irrelevant docs before expensive summarization
   const fetchDoc = _fetchDocumentFn;
   let docsToSummarize = allFoundDocs;
   if (fetchDoc && allFoundDocs.length > 3) {
-    docsToSummarize = await rerankDocs(openaiClient, allFoundDocs, _lastUserQuery, fetchDoc);
+    docsToSummarize = await rerankDocs(openaiClient, allFoundDocs, _lastUserQuery, fetchDoc, emit);
   }
 
   // Phase 2: Summarize only reranked docs
