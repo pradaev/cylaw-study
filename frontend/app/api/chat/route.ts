@@ -18,10 +18,13 @@ import { chatStream, setFetchDocumentFn, setSessionId, setUserEmail } from "@/li
 import { localFetchDocument } from "@/lib/local-retriever";
 import { createVectorizeSearchFn } from "@/lib/retriever";
 import { createBindingClient, createHttpClient } from "@/lib/vectorize-client";
+import { createWeaviateSearchFn } from "@/lib/weaviate-retriever";
 import type { ChatMessage } from "@/lib/types";
 import type { FetchDocumentFn } from "@/lib/llm-client";
 
 const isDev = process.env.NODE_ENV === "development" || process.env.NEXTJS_ENV === "development";
+/** True when running on Node (Railway, Fly.io) — use HTTP clients, no Worker bindings */
+const isNodeRuntime = process.env.DEPLOY_TARGET === "node" || process.env.RAILWAY_ENVIRONMENT != null;
 
 /**
  * Fetch document from Cloudflare R2 via Worker binding.
@@ -133,16 +136,15 @@ const r2FetchViaS3: FetchDocumentFn = async (docId: string): Promise<string | nu
 };
 
 // Wire up document fetching for the summarizer agents
-if (isDev) {
-  // Dev: use S3 HTTP API to reach the REAL R2 bucket (not miniflare emulator)
-  // Falls back to local Python server if R2 credentials are missing
+if (isDev || isNodeRuntime) {
+  // Dev / Node (Railway): use S3 HTTP API for R2; fallback to local if no credentials
   setFetchDocumentFn(async (docId) => {
     const r2Text = await r2FetchViaS3(docId);
     if (r2Text) return r2Text;
     return localFetchDocument(docId);
   });
 } else {
-  // Production: use Worker binding (direct, zero-latency)
+  // Cloudflare Workers: use binding (direct, zero-latency)
   setFetchDocumentFn(r2FetchViaBinding);
 }
 
@@ -181,19 +183,28 @@ export async function POST(request: NextRequest) {
     queryPreview: userQuery.slice(0, 200),
   }));
 
-  // Same Vectorize search in dev and production — different transport only
-  const vectorizeClient = isDev
-    ? createHttpClient()               // Dev: Cloudflare REST API (HTTPS)
-    : await (async () => {             // Production: Worker binding (zero-latency)
-        const { getCloudflareContext } = await import("@opennextjs/cloudflare");
-        const ctx = await getCloudflareContext({ async: true });
-        return createBindingClient(ctx.env as unknown as CloudflareEnv);
-      })();
-  const searchFn = createVectorizeSearchFn(vectorizeClient);
+  // Search backend: weaviate (document-level, 3072d) or vectorize (chunk-level, 1536d)
+  const searchBackend = process.env.SEARCH_BACKEND ?? "vectorize";
+  const weaviateUrl = process.env.WEAVIATE_URL;
 
-  // Get Summarizer binding in production (Service Binding = fresh connection pool per call)
+  let searchFn;
+  if (searchBackend === "weaviate" && weaviateUrl) {
+    searchFn = createWeaviateSearchFn(weaviateUrl);
+  } else {
+    const vectorizeClient =
+      isDev || isNodeRuntime
+        ? createHttpClient()
+        : await (async () => {
+            const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+            const ctx = await getCloudflareContext({ async: true });
+            return createBindingClient(ctx.env as unknown as CloudflareEnv);
+          })();
+    searchFn = createVectorizeSearchFn(vectorizeClient);
+  }
+
+  // Get Summarizer binding (Cloudflare Workers only; Node uses direct OpenAI)
   let summarizerBinding: Fetcher | undefined;
-  if (!isDev) {
+  if (!isDev && !isNodeRuntime) {
     try {
       const { getCloudflareContext } = await import("@opennextjs/cloudflare");
       const ctx = await getCloudflareContext({ async: true });

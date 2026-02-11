@@ -46,11 +46,11 @@
 4. **Query analytics dashboard** — leverage structured logs
 5. **Deploy new index to production** — switch `cyprus-law-cases-search-revised` on prod after testing
 
-### Low Priority (ideal stack)
-6. Hybrid search — Weaviate/Elasticsearch (vector + BM25), Greek analyzers
-7. Document-level embedding — one vector per doc (title + subject + ΝΟΜΙΚΗ ΠΤΥΧΗ → conclusion)
-8. text-embedding-3-large (3072 dims) — requires moving off Vectorize (1536 cap)
-9. Hosting — Railway/Fly.io/Render to avoid Workers limits
+### Low Priority (ideal stack) — partial implementation
+6. ~~**Weaviate + document-level**~~ — DONE: docker-compose, ingest_to_weaviate.py, weaviate-retriever
+7. ~~**text-embedding-3-large**~~ — DONE in Weaviate path (3072d)
+8. ~~**Node/Railway deploy**~~ — DONE: DEPLOY_TARGET=node, RAILWAY_ENVIRONMENT auto-detect
+9. Hybrid BM25 — Weaviate vectorizer "none" = vector-only for now; add vectorizer for hybrid
 10. Legislation integration (64,477 acts from cylaw.org)
 11. CI/CD pipeline (GitHub Actions → Cloudflare deploy)
 12. Automated daily scrape for new cases
@@ -95,6 +95,15 @@
 | `node scripts/pipeline_stage_test.mjs` | Stage-by-stage ground-truth check | Search quality experiments |
 
 ## Last Session Log
+
+### 2026-02-09 (session 11 — Weaviate infra + document-level search)
+- Added Weaviate: docker-compose, weaviate_schema.py, ingest_to_weaviate.py
+- Document-level extraction: rag/document_extractor.py (ΝΟΜΙΚΗ ΠΤΥΧΗ → conclusion)
+- text-embedding-3-large (3072d) in Weaviate path
+- weaviate-retriever.ts: nearVector search, court_level filter
+- SEARCH_BACKEND=weaviate + WEAVIATE_URL to switch
+- Node/Railway: DEPLOY_TARGET=node, RAILWAY_ENVIRONMENT → HTTP clients, no bindings
+- docs/RAILWAY_DEPLOY.md
 
 ### 2026-02-09 (session 10 — ΝΟΜΙΚΗ ΠΤΥΧΗ extraction)
 - **extractDecisionText**: prefer ΝΟΜΙΚΗ ΠΤΥΧΗ (legal analysis) when present (~5400 docs), else ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ
