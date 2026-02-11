@@ -23,6 +23,7 @@
 - **NONE filtering** — irrelevant cases filtered after summarization
 - **Year filtering** — Vectorize metadata filter
 - **Re-embedded index** — `cyprus-law-cases-search-revised` with contextual headers, jurisdiction, cleaned text
+- **Weaviate search path** — `SEARCH_BACKEND=weaviate` + `WEAVIATE_URL`: document-level, text-embedding-3-large (3072d)
 - **Test suite** — search, summarizer, E2E tests, index comparison, deep-dive diagnostic
 - **Pre-commit hook** — TypeScript + ESLint
 - **Production** — https://cyprus-case-law.cylaw-study.workers.dev
@@ -69,6 +70,7 @@
 - **MAX_DOCUMENTS=30** — safe with Service Binding
 - **Worker binding getByIds 20 ID limit** — both clients batch by 20
 - **Vectorize index**: `cyprus-law-cases-search-revised` (new, with headers/jurisdiction/cleaned text)
+- **Weaviate**: docker-compose, ingest_to_weaviate.py, CourtCase schema; full ingest ~10+ hours (150K docs)
 - **Old production index**: `cyprus-law-cases-search` (still live on prod, do NOT delete yet)
 - **Vectorize topK**: `returnMetadata: "all"` → max 20. Use `"none"` + `getByIds()`
 - **Doc API auto-appends .md** — LLM often omits `.md`
@@ -95,6 +97,15 @@
 | `node scripts/pipeline_stage_test.mjs` | Stage-by-stage ground-truth check | Search quality experiments |
 
 ## Last Session Log
+
+### 2026-02-09 (session 13 — Weaviate full ingest + docs)
+- Started full ingest in background: `nohup python3 scripts/ingest_to_weaviate.py`
+- Added docs/WEAVIATE_SETUP.md, .env.example SEARCH_BACKEND options
+- PROJECT_STATUS: Weaviate path, gotchas
+
+### 2026-02-09 (session 12 — Weaviate ingest + truncation)
+- Ingested 10K docs to Weaviate; MAX_CONTENT_CHARS 3500, OpenAI truncation 5500
+- Docker image: semitechnologies/weaviate:1.35.7
 
 ### 2026-02-09 (session 11 — Weaviate infra + document-level search)
 - Added Weaviate: docker-compose, weaviate_schema.py, ingest_to_weaviate.py

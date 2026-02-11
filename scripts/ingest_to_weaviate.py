@@ -94,7 +94,8 @@ def main() -> None:
     # Batch embed + upsert
     for i in tqdm(range(0, len(records), BATCH_SIZE), desc="Embed+Upsert"):
         batch = records[i : i + BATCH_SIZE]
-        texts = [r.content for r in batch]
+        OPENAI_MAX_CHARS = 5500  # ~8K tokens for Greek (0.7 chars/token)
+        texts = [r.content[:OPENAI_MAX_CHARS] for r in batch]
         resp = client.embeddings.create(model=OPENAI_MODEL, input=texts)
         vectors = [d.embedding for d in resp.data]
 

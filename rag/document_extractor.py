@@ -24,7 +24,7 @@ from rag.chunker import (
 
 LEGAL_ANALYSIS_MARKER = "ΝΟΜΙΚΗ ΠΤΥΧΗ"
 DECISION_MARKER = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ"
-MAX_CONTENT_CHARS = 6000  # ~1.5K tokens, safe for text-embedding-3-large (8191 limit)
+MAX_CONTENT_CHARS = 3500  # ~900 tokens (Greek ~0.4 chars/token), safe for text-embedding-3-large (8191 limit)
 
 
 @dataclass
