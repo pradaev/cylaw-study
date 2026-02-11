@@ -123,9 +123,11 @@ def main() -> None:
             if r.status_code != 200:
                 logger.warning("Batch upsert: %s %s", r.status_code, r.text[:300])
             else:
-                errors = [e for e in r.json().get("result", {}).get("errors", []) if e]
-                if errors:
-                    logger.warning("Batch errors: %s", errors[:3])
+                j = r.json()
+                result = j.get("result") if isinstance(j, dict) else {}
+                errs = result.get("errors", []) if isinstance(result, dict) else []
+                if errs:
+                    logger.warning("Batch errors: %s", errs[:3])
         except Exception as e:
             logger.warning("Batch failed: %s", e)
 
