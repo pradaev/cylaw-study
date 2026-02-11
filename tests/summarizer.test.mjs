@@ -131,15 +131,23 @@ Document ID: ${docId}`;
 
 // ── Text Extraction (mirrors llm-client.ts) ────────────
 
+const LEGAL_ANALYSIS_MARKER = "ΝΟΜΙΚΗ ΠΤΥΧΗ";
+const DECISION_MARKER = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ:";
+
 function extractDecisionText(text, maxChars) {
-  const decisionMarker = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ:";
-  const markerIdx = text.indexOf(decisionMarker);
-  let decisionText, title = "";
   const firstNewline = text.indexOf("\n");
-  if (firstNewline > 0) title = text.slice(0, firstNewline).trim() + "\n\n";
-  decisionText = markerIdx !== -1
-    ? title + text.slice(markerIdx + decisionMarker.length).trim()
-    : text;
+  const title = firstNewline > 0 ? text.slice(0, firstNewline).trim() + "\n\n" : "";
+  const legalIdx = text.indexOf(LEGAL_ANALYSIS_MARKER);
+  const decisionIdx = text.indexOf(DECISION_MARKER);
+  let bodyText;
+  if (legalIdx !== -1) {
+    bodyText = text.slice(legalIdx + LEGAL_ANALYSIS_MARKER.length).trim();
+  } else if (decisionIdx !== -1) {
+    bodyText = text.slice(decisionIdx + DECISION_MARKER.length).trim();
+  } else {
+    bodyText = text;
+  }
+  const decisionText = title + bodyText;
   if (decisionText.length <= maxChars) return decisionText;
   const headSize = Math.floor(maxChars * 0.35);
   const tailSize = maxChars - headSize - 200;

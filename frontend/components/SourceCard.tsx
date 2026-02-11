@@ -185,16 +185,20 @@ export function SourceCard({ source, summary, onClick }: SourceCardProps) {
 interface SourceListProps {
   sources: SearchResult[];
   summaryCache?: Record<string, string>;
+  summarizeTotal?: number | null;
   onSourceClick: (docId: string) => void;
 }
 
 const RELEVANCE_ORDER: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2, NONE: 3 };
 
-export function SourceList({ sources, summaryCache, onSourceClick }: SourceListProps) {
+export function SourceList({ sources, summaryCache, summarizeTotal, onSourceClick }: SourceListProps) {
   const summarizedCount = summaryCache
     ? sources.filter((s) => summaryCache[s.doc_id]).length
     : 0;
-  const allDone = summarizedCount === sources.length && sources.length > 0;
+  // After reranking, only a subset of sources is sent to the summarizer.
+  // Use summarizeTotal (from the reranked SSE event) as the denominator.
+  const expectedTotal = summarizeTotal ?? sources.length;
+  const allDone = expectedTotal > 0 && summarizedCount >= expectedTotal;
 
   // Only show cards after ALL summaries are ready — filter NONE, sort by relevance
   const displayList = useMemo(() => {
@@ -224,12 +228,12 @@ export function SourceList({ sources, summaryCache, onSourceClick }: SourceListP
 
   // While loading: show progress bar
   if (!allDone) {
-    const pct = sources.length > 0 ? Math.round((summarizedCount / sources.length) * 100) : 0;
+    const pct = expectedTotal > 0 ? Math.round((summarizedCount / expectedTotal) * 100) : 0;
     return (
       <div className="mt-4">
         <div className="flex items-center gap-3 text-sm text-gray-500">
           <div className="w-4 h-4 border-2 border-gray-300 border-t-indigo-500 rounded-full animate-spin shrink-0" />
-          <span>Ανάλυση αποφάσεων: {summarizedCount}/{sources.length} ({pct}%)</span>
+          <span>Ανάλυση αποφάσεων: {summarizedCount}/{expectedTotal} ({pct}%)</span>
         </div>
         <div className="mt-2 w-full bg-gray-100 rounded-full h-1.5">
           <div

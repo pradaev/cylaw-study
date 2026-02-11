@@ -262,11 +262,12 @@ async function testStage3_Reranker() {
     }
   }
 
-  // Replicate buildRerankPreview from llm-client.ts
+  // Replicate buildRerankPreview from llm-client.ts (prefer ΝΟΜΙΚΗ ΠΤΥΧΗ when present)
   const HEAD_CHARS = 300;
   const DECISION_CHARS = 600;
   const TAIL_CHARS = 800;
   const TAIL_SKIP = 200;
+  const LEGAL_ANALYSIS_MARKER = "ΝΟΜΙΚΗ ΠΤΥΧΗ";
 
   function buildPreview(text) {
     const head = text.slice(0, HEAD_CHARS);
@@ -274,21 +275,23 @@ async function testStage3_Reranker() {
     const tailStart = Math.max(0, tailEnd - TAIL_CHARS);
     const tail = tailStart > HEAD_CHARS ? text.slice(tailStart, tailEnd) : "";
 
-    const marker = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ";
-    const markerIdx = text.indexOf(marker);
+    const legalIdx = text.indexOf(LEGAL_ANALYSIS_MARKER);
+    const keimenoIdx = text.indexOf("ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ");
 
-    if (markerIdx === -1) {
-      if (tail) return head + "\n[...]\n" + tail;
-      return text.slice(0, HEAD_CHARS + DECISION_CHARS + TAIL_CHARS);
+    let decisionPreview;
+    if (legalIdx !== -1) {
+      let start = legalIdx + LEGAL_ANALYSIS_MARKER.length;
+      while (start < text.length && /[:\s*]/.test(text[start])) start++;
+      decisionPreview = text.slice(start, start + DECISION_CHARS);
+    } else if (keimenoIdx !== -1) {
+      let start = keimenoIdx + "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ".length;
+      while (start < text.length && /[:\s*]/.test(text[start])) start++;
+      decisionPreview = text.slice(start, start + DECISION_CHARS);
+    } else {
+      decisionPreview = text.slice(0, DECISION_CHARS);
     }
 
-    let decisionStart = markerIdx + marker.length;
-    while (decisionStart < text.length && /[:\s*]/.test(text[decisionStart])) {
-      decisionStart++;
-    }
-    const decisionPreview = text.slice(decisionStart, decisionStart + DECISION_CHARS);
-
-    const parts = [head, "\n[...ΑΝΑΦΟΡΕΣ omitted...]\n", decisionPreview];
+    const parts = [head, "\n[...]\n", decisionPreview];
     if (tail) parts.push("\n[...middle omitted...]\n", tail);
     return parts.join("");
   }

@@ -40,24 +40,31 @@ const SUMMARIZER_MAX_TOKENS = 1500;
 
 // ── Helpers ────────────────────────────────────────────
 
+/** Legal analysis marker (ΝΟΜΙΚΗ ΠΤΥΧΗ). Used when present for summarizer input. */
+const LEGAL_ANALYSIS_MARKER = "ΝΟΜΙΚΗ ΠΤΥΧΗ";
+const DECISION_MARKER = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ:";
+
+/**
+ * Extract text for summarization. Prefer ΝΟΜΙΚΗ ΠΤΥΧΗ (legal analysis) when present;
+ * else use text after ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ. Truncation: head+tail of the extracted section.
+ */
 function extractDecisionText(text: string, maxChars: number): string {
-  const decisionMarker = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ:";
-  const markerIdx = text.indexOf(decisionMarker);
-
-  let decisionText: string;
-  let title = "";
-
   const firstNewline = text.indexOf("\n");
-  if (firstNewline > 0) {
-    title = text.slice(0, firstNewline).trim() + "\n\n";
-  }
+  const title = firstNewline > 0 ? text.slice(0, firstNewline).trim() + "\n\n" : "";
 
-  if (markerIdx !== -1) {
-    decisionText = title + text.slice(markerIdx + decisionMarker.length).trim();
+  const legalIdx = text.indexOf(LEGAL_ANALYSIS_MARKER);
+  const decisionIdx = text.indexOf(DECISION_MARKER);
+
+  let bodyText: string;
+  if (legalIdx !== -1) {
+    bodyText = text.slice(legalIdx + LEGAL_ANALYSIS_MARKER.length).trim();
+  } else if (decisionIdx !== -1) {
+    bodyText = text.slice(decisionIdx + DECISION_MARKER.length).trim();
   } else {
-    decisionText = text;
+    bodyText = text;
   }
 
+  const decisionText = title + bodyText;
   if (decisionText.length <= maxChars) return decisionText;
 
   const headSize = Math.floor(maxChars * 0.35);
@@ -117,7 +124,7 @@ Summarize this court decision in 400-700 words:
 1. CASE HEADER: Parties, court, date, case number (2 lines max)
 2. STATUS: Final decision (ΑΠΟΦΑΣΗ) or interim (ΕΝΔΙΑΜΕΣΗ ΑΠΟΦΑΣΗ)?
 3. FACTS: Brief background — what happened, who sued whom, what was claimed (3-4 sentences)
-4. WHAT THE CASE IS ACTUALLY ABOUT: In 1-2 sentences, state the core legal issue the court decided.
+4. WHAT THE CASE IS ACTUALLY ABOUT: In 1-2 sentences, state the core legal issue the court decided. This may differ from the research question.
 5. COURT'S FINDINGS on "${focus}":
    Pick ONE engagement level:
    - RULED: The court analyzed the topic and reached a conclusion or ruling.
@@ -130,7 +137,12 @@ Summarize this court decision in 400-700 words:
    - If MENTIONED: Note the reference briefly.
    - If NOT ADDRESSED: Write "NOT ADDRESSED."
 6. OUTCOME: What did the court order?
-7. RELEVANCE RATING: Rate as HIGH / MEDIUM / LOW / NONE and explain in one sentence.
+7. RELEVANCE RATING: Rate as HIGH / MEDIUM / LOW / NONE and explain in one sentence:
+   - HIGH: The court ruled on the research topic (level = RULED).
+   - MEDIUM: The court substantively discussed or analyzed the topic without reaching a final conclusion (level = DISCUSSED). Still valuable for research.
+   - LOW: The topic was only mentioned in passing without substantive analysis (level = MENTIONED).
+   - NONE: The topic does not appear in the decision (level = NOT ADDRESSED).
+   Rate based on whether the COURT addressed the research question, NOT on whether the document merely mentions laws or regulations by name.
 
 CRITICAL RULES:
 - ONLY state what is EXPLICITLY written in the text.

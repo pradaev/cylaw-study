@@ -46,20 +46,25 @@
 4. **Query analytics dashboard** — leverage structured logs
 5. **Deploy new index to production** — switch `cyprus-law-cases-search-revised` on prod after testing
 
-### Low Priority
-6. Legislation integration (64,477 acts from cylaw.org)
-7. CI/CD pipeline (GitHub Actions → Cloudflare deploy)
-8. Automated daily scrape for new cases
+### Low Priority (ideal stack)
+6. Hybrid search — Weaviate/Elasticsearch (vector + BM25), Greek analyzers
+7. Document-level embedding — one vector per doc (title + subject + ΝΟΜΙΚΗ ΠΤΥΧΗ → conclusion)
+8. text-embedding-3-large (3072 dims) — requires moving off Vectorize (1536 cap)
+9. Hosting — Railway/Fly.io/Render to avoid Workers limits
+10. Legislation integration (64,477 acts from cylaw.org)
+11. CI/CD pipeline (GitHub Actions → Cloudflare deploy)
+12. Automated daily scrape for new cases
 
 ## Gotchas
 
 ### Architecture
 - **Service Binding** — each batch of 5 docs = separate call = fresh connection pool
 - **Three-phase pipeline** — LLM searches → GPT-4o-mini reranks → GPT-4o summarizes. Source cards ARE the answer.
-- **Reranker** — reads head+Subject+decision+tail preview per doc, scores in batches of 20, keeps >= 4. Cost ~$0.005.
+- **Reranker** — reads head+Subject+ΝΟΜΙΚΗ ΠΤΥΧΗ (or ΚΕΙΜΕΝΟ) preview+tail per doc, scores in batches of 20, keeps >= 4. Cost ~$0.005.
 - **Summarizer prompt in English** — output in Greek, instructions in English (fewer hallucinations)
 
 ### Technical
+- **ΝΟΜΙΚΗ ΠΤΥΧΗ extraction** — when present (~5400 docs), reranker preview and summarizer use the legal analysis section instead of ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ
 - **Workers 6 connection limit** — solved by Service Binding
 - **MAX_DOCUMENTS=30** — safe with Service Binding
 - **Worker binding getByIds 20 ID limit** — both clients batch by 20
@@ -69,7 +74,7 @@
 - **Doc API auto-appends .md** — LLM often omits `.md`
 - `initOpenNextCloudflareForDev()` creates EMPTY miniflare R2 — use `r2FetchViaS3` for dev
 - R2 + Vectorize credentials in `frontend/.env.local` for dev
-- `extractDecisionText()` truncates > 80K chars: 35% head + 65% tail
+- `extractDecisionText()` prefers ΝΟΜΙΚΗ ΠΤΥΧΗ when present, else ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ; truncates > 80K chars: 35% head + 65% tail
 
 ### Re-embedding Pipeline (scripts/batch_ingest.py)
 - Pipeline: `create-index` → `prepare` → `submit` → `status` → `download` → `upload`
@@ -90,6 +95,12 @@
 | `node scripts/pipeline_stage_test.mjs` | Stage-by-stage ground-truth check | Search quality experiments |
 
 ## Last Session Log
+
+### 2026-02-09 (session 10 — ΝΟΜΙΚΗ ΠΤΥΧΗ extraction)
+- **extractDecisionText**: prefer ΝΟΜΙΚΗ ΠΤΥΧΗ (legal analysis) when present (~5400 docs), else ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ
+- **buildRerankPreview**: use first 600 chars after ΝΟΜΙΚΗ ΠΤΥΧΗ for relevance scoring when present
+- Updated llm-client.ts, summarizer-worker, tests/summarizer.test.mjs, scripts/pipeline_stage_test.mjs, summarizer_focus_comparison.mjs
+- Part of ideal-stack plan: hybrid search, document-level embedding, Weaviate remain for future
 
 ### 2026-02-10 (session 9 — search quality experiment framework + reranker fix)
 - Created `docs/SEARCH_QUALITY_EXPERIMENT.md` — repeatable test case with 13 ground-truth docs, methodology, success criteria

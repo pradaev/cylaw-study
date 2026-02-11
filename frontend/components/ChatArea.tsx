@@ -12,6 +12,7 @@ interface AssistantState {
   activityLog: ActivityEntry[];
   isStreaming: boolean;
   usage: UsageData | null;
+  summarizeTotal: number | null;
 }
 
 interface HistoryMessage {
@@ -20,6 +21,7 @@ interface HistoryMessage {
   sources?: SearchResult[];
   activityLog?: ActivityEntry[];
   usage?: UsageData | null;
+  summarizeTotal?: number | null;
 }
 
 const EXAMPLE_QUERIES = [
@@ -44,6 +46,22 @@ function addActivity(
   };
 }
 
+/** Update the last activity entry whose text starts with `prefix`. */
+function updateActivityByPrefix(
+  prev: AssistantState,
+  prefix: string,
+  newText: string,
+): AssistantState {
+  const log = [...prev.activityLog];
+  for (let i = log.length - 1; i >= 0; i--) {
+    if (log[i].text.startsWith(prefix)) {
+      log[i] = { ...log[i], text: newText };
+      break;
+    }
+  }
+  return { ...prev, activityLog: log };
+}
+
 export function ChatArea() {
   const [messages, setMessages] = useState<HistoryMessage[]>([]);
   const [input, setInput] = useState("");
@@ -56,6 +74,7 @@ export function ChatArea() {
     activityLog: [],
     isStreaming: false,
     usage: null,
+    summarizeTotal: null,
   });
 
   // Stores summarizer output per doc_id — survives across messages
@@ -106,9 +125,11 @@ export function ChatArea() {
         ],
         isStreaming: true,
         usage: null,
+        summarizeTotal: null,
       });
 
       let lastUsage: UsageData | null = null;
+      let lastSummarizeTotal: number | null = null;
       let lastActivityLog: ActivityEntry[] = [
         { type: "sending", text: `Αποστολή στο ${modelLabel}...`, timestamp: Date.now() },
       ];
@@ -167,13 +188,8 @@ export function ChatArea() {
                   const filterStr = filters.length > 0 ? ` [${filters.join(", ")}]` : "";
 
                   setAssistant((prev) => {
-                    // Add search line
-                    let updated = addActivity(
-                      prev,
-                      "searching",
-                      `Αναζήτηση #${searchData.step}: "${searchData.query}"${filterStr}`,
-                    );
-                    // Add legal context if present
+                    let updated = prev;
+                    // Show legal context BEFORE the first search — it's the LLM's analysis
                     if (searchData.legalContext && searchData.step === 1) {
                       updated = addActivity(
                         updated,
@@ -181,6 +197,12 @@ export function ChatArea() {
                         `Νομικό πλαίσιο: ${searchData.legalContext}`,
                       );
                     }
+                    // Add search line
+                    updated = addActivity(
+                      updated,
+                      "searching",
+                      `Αναζήτηση #${searchData.step}: "${searchData.query}"${filterStr}`,
+                    );
                     lastActivityLog = updated.activityLog;
                     return updated;
                   });
@@ -195,16 +217,51 @@ export function ChatArea() {
                   }));
                   break;
                 }
-                case "summarizing": {
-                  const sumData = JSON.parse(data) as { count: number; focus: string };
+                case "search_result": {
+                  const sr = JSON.parse(data) as { step: number; found: number; total: number };
                   setAssistant((prev) => {
+                    const prefix = `Αναζήτηση #${sr.step}:`;
+                    const log = [...prev.activityLog];
+                    for (let i = log.length - 1; i >= 0; i--) {
+                      if (log[i].text.startsWith(prefix)) {
+                        log[i] = { ...log[i], text: `${log[i].text} → ${sr.found} αποφάσεων` };
+                        break;
+                      }
+                    }
+                    lastActivityLog = log;
+                    return { ...prev, activityLog: log };
+                  });
+                  break;
+                }
+                case "reranked": {
+                  const rr = JSON.parse(data) as { inputDocs: number; keptCount: number; droppedCount: number };
+                  setAssistant((prev) => {
+                    const updated = addActivity(
+                      prev,
+                      "found",
+                      `Αξιολόγηση σχετικότητας: ${rr.keptCount} από ${rr.inputDocs} κρατήθηκαν`,
+                    );
+                    lastActivityLog = updated.activityLog;
+                    return updated;
+                  });
+                  break;
+                }
+                case "summarizing": {
+                  const sumData = JSON.parse(data) as { count: number; focus: string; progress?: number };
+                  lastSummarizeTotal = sumData.count;
+                  setAssistant((prev) => {
+                    // Only add the activity line once (first summarizing event)
+                    const alreadyHas = prev.activityLog.some((e) => e.type === "analyzing");
+                    if (alreadyHas) {
+                      return { ...prev, summarizeTotal: sumData.count };
+                    }
                     const updated = addActivity(
                       prev,
                       "analyzing",
                       `Ανάλυση ${sumData.count} αποφάσεων...`,
                     );
                     lastActivityLog = updated.activityLog;
-                    return updated;
+                    return { ...updated, summarizeTotal: sumData.count };
                   });
                   break;
                 }
@@ -279,6 +336,7 @@ export function ChatArea() {
               sources: currentSources,
               activityLog: lastActivityLog,
               usage: lastUsage,
+              summarizeTotal: lastSummarizeTotal,
             },
           ]);
           setAssistant({
@@ -287,6 +345,7 @@ export function ChatArea() {
             activityLog: [],
             isStreaming: false,
             usage: null,
+            summarizeTotal: null,
           });
         }
       } catch (err) {
@@ -321,6 +380,7 @@ export function ChatArea() {
       activityLog: [],
       isStreaming: false,
       usage: null,
+      summarizeTotal: null,
     });
   }, []);
 
@@ -386,6 +446,7 @@ export function ChatArea() {
             summaryCache={summaryCache}
             activityLog={msg.activityLog}
             usage={msg.usage}
+            summarizeTotal={msg.summarizeTotal}
             onSourceClick={setDocViewerId}
           />
         ))}
@@ -399,6 +460,7 @@ export function ChatArea() {
             activityLog={assistant.activityLog}
             isStreaming={assistant.isStreaming}
             usage={assistant.usage}
+            summarizeTotal={assistant.summarizeTotal}
             onSourceClick={setDocViewerId}
           />
         )}

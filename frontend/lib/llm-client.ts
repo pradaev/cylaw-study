@@ -177,7 +177,7 @@ export type SearchFn = (
 export type FetchDocumentFn = (docId: string) => Promise<string | null>;
 
 interface SSEYield {
-  event: "searching" | "sources" | "reranked" | "summarizing" | "summaries" | "token" | "done" | "error" | "usage";
+  event: "searching" | "search_result" | "sources" | "reranked" | "summarizing" | "summaries" | "token" | "done" | "error" | "usage";
   data: unknown;
 }
 
@@ -309,24 +309,34 @@ function formatSummariesForLLM(results: SummaryResult[]): string {
 
 // ── Summarizer Agent ───────────────────────────────────
 
+/** Legal analysis marker: court's reasoning section (ΝΟΜΙΚΗ ΠΤΥΧΗ). ~5400 docs have it. */
+const LEGAL_ANALYSIS_MARKER = "ΝΟΜΙΚΗ ΠΤΥΧΗ";
+
+/** Decision text marker: start of case body. */
+const DECISION_MARKER = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ:";
+
+/**
+ * Extract text for summarization. Prefer ΝΟΜΙΚΗ ΠΤΥΧΗ (legal analysis) when present;
+ * else use text after ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ. Truncation: head+tail of the extracted section.
+ */
 function extractDecisionText(text: string, maxChars: number): string {
-  const decisionMarker = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ:";
-  const markerIdx = text.indexOf(decisionMarker);
-
-  let decisionText: string;
-  let title = "";
-
   const firstNewline = text.indexOf("\n");
-  if (firstNewline > 0) {
-    title = text.slice(0, firstNewline).trim() + "\n\n";
-  }
+  const title = firstNewline > 0 ? text.slice(0, firstNewline).trim() + "\n\n" : "";
 
-  if (markerIdx !== -1) {
-    decisionText = title + text.slice(markerIdx + decisionMarker.length).trim();
+  // Prefer legal analysis section when present
+  const legalIdx = text.indexOf(LEGAL_ANALYSIS_MARKER);
+  const decisionIdx = text.indexOf(DECISION_MARKER);
+
+  let bodyText: string;
+  if (legalIdx !== -1) {
+    bodyText = text.slice(legalIdx + LEGAL_ANALYSIS_MARKER.length).trim();
+  } else if (decisionIdx !== -1) {
+    bodyText = text.slice(decisionIdx + DECISION_MARKER.length).trim();
   } else {
-    decisionText = text;
+    bodyText = text;
   }
 
+  const decisionText = title + bodyText;
   if (decisionText.length <= maxChars) return decisionText;
 
   const headSize = Math.floor(maxChars * 0.35);
@@ -419,63 +429,50 @@ const RERANK_TAIL_CHARS = 800;        // chars from end (ruling/conclusion)
 const RERANK_TAIL_SKIP = 200;         // chars to skip from very end (signatures/costs)
 
 /**
- * Extract a smart preview: title + subject + start of decision + conclusion/ruling.
+ * Extract a smart preview: title + subject + start of legal analysis / decision + conclusion.
  *
- * Cypriot docs have structure: title → ΑΝΑΦΟΡΕΣ (cross-refs) → ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ → decision.
- * The ΑΝΑΦΟΡΕΣ section is noise for relevance scoring. We grab:
- *   1. First ~300 chars (title, parties, metadata)
- *   2. Subject line if present (e.g., "Subject: Δικαιοδοσία ... / Ε.Κ 1103/2016")
- *   3. First ~600 chars after ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ marker (court name, jurisdiction type)
- *   4. ~800 chars from near the end (ruling/conclusion, skip last 200 for signatures)
- *
- * For docs without the marker (areiospagos, jsc), we take head + subject + tail.
+ * Cypriot docs: title → ΑΝΑΦΟΡΕΣ → ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ → sections → ΝΟΜΙΚΗ ΠΤΥΧΗ (legal analysis).
+ * When ΝΟΜΙΚΗ ΠΤΥΧΗ exists (~5400 docs), use it for relevance scoring — it's the court's reasoning.
+ * Otherwise use first 600 chars after ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ.
  */
 function buildRerankPreview(text: string): string {
   const head = text.slice(0, RERANK_HEAD_CHARS);
 
-  // Extract Subject line if present (~5800 docs have it) — strong topical signal
   let subjectLine = "";
   const subjectMatch = text.match(/Subject:\s*(.+)/);
   if (subjectMatch) {
     subjectLine = `[SUBJECT: ${subjectMatch[1].trim()}]`;
   }
 
-  // Tail: court's conclusion/ruling (skip signatures and cost allocation at very end)
   const tailEnd = Math.max(0, text.length - RERANK_TAIL_SKIP);
   const tailStart = Math.max(0, tailEnd - RERANK_TAIL_CHARS);
-  const tail = tailStart > RERANK_HEAD_CHARS
-    ? text.slice(tailStart, tailEnd)
-    : "";
+  const tail = tailStart > RERANK_HEAD_CHARS ? text.slice(tailStart, tailEnd) : "";
 
-  const marker = "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ";
-  const markerIdx = text.indexOf(marker);
+  // Prefer ΝΟΜΙΚΗ ΠΤΥΧΗ (legal analysis) for preview when present
+  const legalIdx = text.indexOf(LEGAL_ANALYSIS_MARKER);
+  const keimenoIdx = text.indexOf("ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ");
 
-  if (markerIdx === -1) {
-    // No marker (areiospagos, jsc, rscc) — head + subject + tail
-    const parts = [head];
-    if (subjectLine) parts.push(subjectLine);
-    if (tail) {
-      parts.push("\n[...]\n", tail);
-    } else {
-      return text.slice(0, RERANK_HEAD_CHARS + RERANK_DECISION_CHARS + RERANK_TAIL_CHARS);
+  let decisionPreview: string;
+  if (legalIdx !== -1) {
+    let start = legalIdx + LEGAL_ANALYSIS_MARKER.length;
+    while (start < text.length && /[:\s*]/.test(text[start])) {
+      start++;
     }
-    return parts.join("\n");
+    decisionPreview = text.slice(start, start + RERANK_DECISION_CHARS);
+  } else if (keimenoIdx !== -1) {
+    let start = keimenoIdx + "ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ".length;
+    while (start < text.length && /[:\s*]/.test(text[start])) {
+      start++;
+    }
+    decisionPreview = text.slice(start, start + RERANK_DECISION_CHARS);
+  } else {
+    decisionPreview = text.slice(0, RERANK_DECISION_CHARS);
   }
-
-  // Skip the marker itself and any trailing `:` or `*`
-  let decisionStart = markerIdx + marker.length;
-  while (decisionStart < text.length && /[:\s*]/.test(text[decisionStart])) {
-    decisionStart++;
-  }
-
-  const decisionPreview = text.slice(decisionStart, decisionStart + RERANK_DECISION_CHARS);
 
   const parts = [head];
   if (subjectLine) parts.push(subjectLine);
-  parts.push("\n[...ΑΝΑΦΟΡΕΣ omitted...]\n", decisionPreview);
-  if (tail) {
-    parts.push("\n[...middle omitted...]\n", tail);
-  }
+  parts.push("\n[...]\n", decisionPreview);
+  if (tail) parts.push("\n[...middle omitted...]\n", tail);
 
   return parts.join("");
 }
@@ -742,10 +739,10 @@ async function summarizeAllDocs(
     return { inputTokens: 0, outputTokens: 0, count: 0 };
   }
 
-  // Enrich focus with legal context from LLM tool calls (laws, regulations, key terms)
-  const summarizerFocus = _legalContext
-    ? `${_lastUserQuery}\n\nΝομικό πλαίσιο: ${_legalContext}`
-    : _lastUserQuery;
+  // Use only user query as focus. Legal context was found to add noise —
+  // summarizer can over-weight mention of specific regulations (false HIGH on C-docs)
+  // or under-weight docs that address the topic but don't cite expected laws (false NONE on B-docs).
+  const summarizerFocus = _lastUserQuery;
 
   emit({ event: "summarizing", data: { count: docs.length, focus: _lastUserQuery } });
 
@@ -972,6 +969,12 @@ async function streamOpenAI(
           );
           allFoundDocs.push(...newDocs);
 
+          // Notify UI about search completion with doc count
+          emit({
+            event: "search_result",
+            data: { step: searchStep, found: newDocs.length, total: allSources.length },
+          });
+
           // Tool result: list of found docs so LLM can decide if more searches needed
           const docList = newDocs.slice(0, 5).map((r) => `${r.title} (${r.court}, ${r.year})`).join("; ");
           apiMessages.push({
@@ -1128,6 +1131,12 @@ async function streamClaude(
             emit,
           );
           allFoundDocs.push(...newDocs);
+
+          // Notify UI about search completion with doc count
+          emit({
+            event: "search_result",
+            data: { step: searchStep, found: newDocs.length, total: allSources.length },
+          });
 
           const docList = newDocs.slice(0, 5).map((r) => `${r.title} (${r.court}, ${r.year})`).join("; ");
           toolResults.push({

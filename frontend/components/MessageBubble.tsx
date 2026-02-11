@@ -13,6 +13,7 @@ interface MessageBubbleProps {
   activityLog?: ActivityEntry[];
   isStreaming?: boolean;
   usage?: UsageData | null;
+  summarizeTotal?: number | null;
   onSourceClick: (docId: string) => void;
 }
 
@@ -69,6 +70,7 @@ export function MessageBubble({
   activityLog,
   isStreaming,
   usage,
+  summarizeTotal,
   onSourceClick,
 }: MessageBubbleProps) {
   const renderedHtml = useMemo(() => {
@@ -144,7 +146,7 @@ export function MessageBubble({
 
         {/* Source cards — collapsed by default */}
         {sources && sources.length > 0 && (
-          <SourceList sources={sources} summaryCache={summaryCache} onSourceClick={onSourceClick} />
+          <SourceList sources={sources} summaryCache={summaryCache} summarizeTotal={summarizeTotal} onSourceClick={onSourceClick} />
         )}
 
         {/* Usage / cost info */}
