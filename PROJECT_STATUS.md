@@ -23,7 +23,7 @@
 - **NONE filtering** — irrelevant cases filtered after summarization
 - **Year filtering** — Vectorize metadata filter
 - **Re-embedded index** — `cyprus-law-cases-search-revised` with contextual headers, jurisdiction, cleaned text
-- **Weaviate search path** — `SEARCH_BACKEND=weaviate` + `WEAVIATE_URL`: document-level, text-embedding-3-large (3072d)
+- **Weaviate search path** — `SEARCH_BACKEND=weaviate` + `WEAVIATE_URL`: document-level, text-embedding-3-large (3072d), 149,886 docs
 - **Test suite** — search, summarizer, E2E tests, index comparison, deep-dive diagnostic
 - **Pre-commit hook** — TypeScript + ESLint
 - **Production** — https://cyprus-case-law.cylaw-study.workers.dev
@@ -70,7 +70,7 @@
 - **MAX_DOCUMENTS=30** — safe with Service Binding
 - **Worker binding getByIds 20 ID limit** — both clients batch by 20
 - **Vectorize index**: `cyprus-law-cases-search-revised` (new, with headers/jurisdiction/cleaned text)
-- **Weaviate**: docker-compose, ingest_to_weaviate.py, CourtCase schema; full ingest ~10+ hours (150K docs)
+- **Weaviate**: docker-compose, ingest_to_weaviate.py, CourtCase schema; 149,886 docs ingested (test: scripts/test_weaviate_search.py)
 - **Old production index**: `cyprus-law-cases-search` (still live on prod, do NOT delete yet)
 - **Vectorize topK**: `returnMetadata: "all"` → max 20. Use `"none"` + `getByIds()`
 - **Doc API auto-appends .md** — LLM often omits `.md`
@@ -98,6 +98,12 @@
 
 ## Last Session Log
 
+### 2026-02-10 (session 14 — nightly report + Weaviate complete)
+- **Weaviate full ingest DONE** — 149,886 docs, ~2h19m embed+upsert, 2998 batches
+- Smoke test: scripts/test_weaviate_search.py — OK
+- docs/NIGHTLY_REPORT_2026-02-10.md — overnight status
+- .env.local updated: SEARCH_BACKEND=weaviate, WEAVIATE_URL
+
 ### 2026-02-09 (session 13 — Weaviate full ingest + docs)
 - Started full ingest in background: `nohup python3 scripts/ingest_to_weaviate.py`
 - Added docs/WEAVIATE_SETUP.md, .env.example SEARCH_BACKEND options
@@ -106,41 +112,5 @@
 ### 2026-02-09 (session 12 — Weaviate ingest + truncation)
 - Ingested 10K docs to Weaviate; MAX_CONTENT_CHARS 3500, OpenAI truncation 5500
 - Docker image: semitechnologies/weaviate:1.35.7
-
-### 2026-02-09 (session 11 — Weaviate infra + document-level search)
-- Added Weaviate: docker-compose, weaviate_schema.py, ingest_to_weaviate.py
-- Document-level extraction: rag/document_extractor.py (ΝΟΜΙΚΗ ΠΤΥΧΗ → conclusion)
-- text-embedding-3-large (3072d) in Weaviate path
-- weaviate-retriever.ts: nearVector search, court_level filter
-- SEARCH_BACKEND=weaviate + WEAVIATE_URL to switch
-- Node/Railway: DEPLOY_TARGET=node, RAILWAY_ENVIRONMENT → HTTP clients, no bindings
-- docs/RAILWAY_DEPLOY.md
-
-### 2026-02-09 (session 10 — ΝΟΜΙΚΗ ΠΤΥΧΗ extraction)
-- **extractDecisionText**: prefer ΝΟΜΙΚΗ ΠΤΥΧΗ (legal analysis) when present (~5400 docs), else ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ
-- **buildRerankPreview**: use first 600 chars after ΝΟΜΙΚΗ ΠΤΥΧΗ for relevance scoring when present
-- Updated llm-client.ts, summarizer-worker, tests/summarizer.test.mjs, scripts/pipeline_stage_test.mjs, summarizer_focus_comparison.mjs
-- Part of ideal-stack plan: hybrid search, document-level embedding, Weaviate remain for future
-
-### 2026-02-10 (session 9 — search quality experiment framework + reranker fix)
-- Created `docs/SEARCH_QUALITY_EXPERIMENT.md` — repeatable test case with 13 ground-truth docs, methodology, success criteria
-- Created `scripts/pipeline_stage_test.mjs` — stage-by-stage diagnostic (vector search, reranker, summarizer)
-- Diagnosed filtering at each stage: vector search misses A4/B5, reranker dropped A3, summarizer too strict on B-docs
-- **Critical fix**: batch reranking (20 docs/batch) — sending 60+ docs in one call caused GPT-4o-mini attention degradation
-- Added Subject-line extraction to reranker preview — improved A3 detection
-- Sort `allFoundDocs` by score before reranking so best candidates always get evaluated
-- Enriched summarizer `focus` with `legal_context` from LLM tool calls
-- Added `reranked` SSE event with per-doc scores for observability
-- Results: A3 (key EU Reg 2016/1103 case) now found as HIGH; hit rate 14% → 20%
-
-### 2026-02-09 (session 8 — search quality: score threshold + reranker)
-- Added score threshold in `retriever.ts`: MIN_SCORE=0.42, adaptive drop at 75% of best match
-- Added GPT-4o-mini reranker in `llm-client.ts`: reads 600 chars, scores 0-10, keeps >= 4
-- Test results: 48 docs → 22 reranked → 3 kept (14% hit rate), cost $1.16, time 144s
-
-### 2026-02-09 (session 7 — LLM query diversification + doc audit)
-- Fixed 24 stale references in 11 files (index names, pipeline commands, areiospagos classification)
-- Implemented LLM search query diversification in `buildSystemPrompt()`: facet-based strategy
-- Deep-dive diagnostic: hit rate improved 2% → 4% on niche foreign-law query
 
 
