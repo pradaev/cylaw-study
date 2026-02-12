@@ -434,13 +434,14 @@ Document ID: ${docId}`;
 // ── Lightweight Reranker ──────────────────────────────
 
 const RERANK_MODEL = "gpt-4o-mini";
-const RERANK_MIN_SCORE = 4;           // 0-10 scale; keep docs scoring >= 4
-const RERANK_MAX_DOCS_IN = 90;        // max docs to send to reranker (3 searches × 30 docs)
-const RERANK_BATCH_SIZE = 20;         // score in batches of 20 to prevent attention degradation
-const MAX_SUMMARIZE_DOCS = 30;        // hard cap: max docs to send to GPT-4o summarizer
-const RERANK_HEAD_CHARS = 300;        // chars from document head (title, parties)
-const RERANK_DECISION_CHARS = 600;    // chars from start of decision text
-const RERANK_TAIL_CHARS = 800;        // chars from end (ruling/conclusion)
+const RERANK_MIN_SCORE_GPT = 4;      // 0-10 scale; GPT-4o-mini: keep docs scoring >= 4
+const RERANK_MIN_SCORE_COHERE = 0.1; // 0-10 scale (= 0.01 native); Cohere scores are much lower, use top_n + cap
+const RERANK_MAX_DOCS_IN = 90;       // max docs to send to reranker (3 searches × 30 docs)
+const RERANK_BATCH_SIZE = 20;        // score in batches of 20 to prevent attention degradation
+const MAX_SUMMARIZE_DOCS = 30;       // hard cap: max docs to send to GPT-4o summarizer
+const RERANK_HEAD_CHARS = 500;        // chars from document head (title, parties)
+const RERANK_DECISION_CHARS = 2000;   // chars from start of decision text / ΝΟΜΙΚΗ ΠΤΥΧΗ
+const RERANK_TAIL_CHARS = 1500;       // chars from end (ruling/conclusion)
 const RERANK_TAIL_SKIP = 200;         // chars to skip from very end (signatures/costs)
 
 /**
@@ -546,7 +547,7 @@ async function rerankDocs(
     rerankBackend = "cohere";
     try {
       const documents = previews.map((p) => p.preview);
-      const results = await cohereRerank(userQuery, documents);
+      const results = await cohereRerank(userQuery, documents, MAX_SUMMARIZE_DOCS);
       // Cohere returns 0-1 scores; multiply by 10 for compatibility with 0-10 scale
       for (const r of results) {
         allScores.set(r.index, Math.round(r.score * 10 * 10) / 10); // one decimal
@@ -633,11 +634,12 @@ ${docList}`;
   }
 
   // 3. Filter: keep docs with score >= threshold, sorted by reranker score (desc)
+  const minScore = rerankBackend === "cohere" ? RERANK_MIN_SCORE_COHERE : RERANK_MIN_SCORE_GPT;
   const scored: { doc: SearchResult; rerankScore: number }[] = [];
   const dropped: string[] = [];
   for (const p of previews) {
     const score = allScores.get(p.idx) ?? 0;
-    if (score >= RERANK_MIN_SCORE) {
+    if (score >= minScore) {
       const original = docsToRerank[p.idx];
       if (original) scored.push({ doc: original, rerankScore: score });
     } else {
@@ -671,7 +673,7 @@ ${docList}`;
     keptByScore: scored.length,
     cappedTo: cappedCount,
     dropped: dropped.length,
-    minScore: RERANK_MIN_SCORE,
+    minScore: minScore,
     inputTokens: totalInputTokens,
     outputTokens: totalOutputTokens,
   }));
@@ -693,7 +695,7 @@ ${docList}`;
         keptCount: kept.length,
         droppedCount: dropped.length,
         cappedFrom: scored.length,
-        threshold: RERANK_MIN_SCORE,
+        threshold: minScore,
         scores: scoreDetails,
       },
     });
