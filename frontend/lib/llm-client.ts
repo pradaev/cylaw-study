@@ -381,7 +381,21 @@ Summarize this court decision in 400-700 words:
    - If MENTIONED: Note the reference briefly.
    - If NOT ADDRESSED: Write "NOT ADDRESSED."
 6. OUTCOME: What did the court order?
-7. RELEVANCE RATING: Rate as HIGH / MEDIUM / LOW / NONE and explain in one sentence.
+7. RELEVANCE RATING — rate based on RESEARCH VALUE to the lawyer, NOT on engagement level above:
+   The engagement level (section 5) describes HOW the court addressed the topic.
+   The relevance rating describes WHETHER THIS CASE IS USEFUL for the lawyer's research — these are DIFFERENT things.
+   A case can be NOT ADDRESSED on the exact topic but still MEDIUM/HIGH relevance if the facts, parties, or legal context overlap significantly.
+
+   Rate as HIGH / MEDIUM / LOW / NONE:
+   - HIGH: A lawyer researching this topic MUST read this case. The court analyzed the specific legal issue, or the case involves nearly identical facts/parties/legal questions.
+   - MEDIUM: A lawyer would BENEFIT from reading this case. It shares key factual or legal elements: same type of dispute, similar parties (e.g., foreign nationals), overlapping legal area, or cross-border elements — even if the court's main focus was different.
+   - LOW: Tangentially related. Same broad area of law but different context.
+   - NONE: No connection to the research question whatsoever — completely different area of law, different type of dispute, no overlapping facts.
+
+   MANDATORY OVERRIDES (apply BEFORE deciding your rating):
+   - If the research question involves FOREIGN LAW and this case has foreign parties, cross-border assets, or references to non-Cypriot legal systems → rate at least MEDIUM, even if the court did not explicitly analyze foreign law as a topic.
+   - A purely domestic case (Cypriot parties, Cypriot assets, no foreign element) is LOW even if it involves the same area of law.
+   - Only rate NONE if the case is about a COMPLETELY DIFFERENT area of law (e.g., immigration, criminal, labor when the question is about family property).
 
 CRITICAL RULES:
 - ONLY state what is EXPLICITLY written in the text.
