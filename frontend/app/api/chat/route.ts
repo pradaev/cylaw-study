@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { chatStream, setFetchDocumentFn, setSessionId, setUserEmail } from "@/lib/llm-client";
 import { localFetchDocument } from "@/lib/local-retriever";
 import { createVectorizeSearchFn } from "@/lib/retriever";
+import { createHybridSearchFn } from "@/lib/pg-retriever";
 import { createBindingClient, createHttpClient } from "@/lib/vectorize-client";
 import type { ChatMessage } from "@/lib/types";
 import type { FetchDocumentFn } from "@/lib/llm-client";
@@ -191,7 +192,13 @@ export async function POST(request: NextRequest) {
           const ctx = await getCloudflareContext({ async: true });
           return createBindingClient(ctx.env as unknown as CloudflareEnv);
         })();
-  const searchFn = createVectorizeSearchFn(vectorizeClient);
+  const vectorizeSearchFn = createVectorizeSearchFn(vectorizeClient);
+
+  // Hybrid search: Vectorize (vector) + PostgreSQL (BM25) via RRF fusion
+  // Falls back to Vectorize-only if DATABASE_URL is not set
+  const searchFn = process.env.DATABASE_URL
+    ? createHybridSearchFn(vectorizeSearchFn)
+    : vectorizeSearchFn;
 
   // Get Summarizer binding (Cloudflare Workers only; Node uses direct OpenAI)
   let summarizerBinding: Fetcher | undefined;

@@ -547,7 +547,8 @@ async function rerankDocs(
     rerankBackend = "cohere";
     try {
       const documents = previews.map((p) => p.preview);
-      const results = await cohereRerank(userQuery, documents, MAX_SUMMARIZE_DOCS);
+      // Return ALL scores (not just top N) so BM25-found docs aren't silently dropped
+      const results = await cohereRerank(userQuery, documents);
       // Cohere returns 0-1 scores; multiply by 10 for compatibility with 0-10 scale
       for (const r of results) {
         allScores.set(r.index, Math.round(r.score * 10 * 10) / 10); // one decimal
@@ -634,21 +635,43 @@ ${docList}`;
   }
 
   // 3. Filter: keep docs with score >= threshold, sorted by reranker score (desc)
+  //    Exception: docs with strong BM25 rank (from hybrid search) are force-kept
+  //    even if Cohere scored them low — BM25 keyword match is a reliable signal.
+  const BM25_FORCE_KEEP_RANK = 50; // force-keep docs in top 50 BM25 results
   const minScore = rerankBackend === "cohere" ? RERANK_MIN_SCORE_COHERE : RERANK_MIN_SCORE_GPT;
   const scored: { doc: SearchResult; rerankScore: number }[] = [];
   const dropped: string[] = [];
+  let bm25ForceKept = 0;
   for (const p of previews) {
     const score = allScores.get(p.idx) ?? 0;
-    if (score >= minScore) {
-      const original = docsToRerank[p.idx];
-      if (original) scored.push({ doc: original, rerankScore: score });
+    const original = docsToRerank[p.idx];
+    const hasBm25Signal = original?.bm25Rank != null && original.bm25Rank <= BM25_FORCE_KEEP_RANK;
+
+    if (score >= minScore || hasBm25Signal) {
+      if (original) {
+        scored.push({ doc: original, rerankScore: score });
+        if (score < minScore && hasBm25Signal) bm25ForceKept++;
+      }
     } else {
       dropped.push(p.docId);
     }
   }
 
-  // Sort by reranker score (desc), then vector score (desc) as tiebreaker
-  scored.sort((a, b) => b.rerankScore - a.rerankScore || (b.doc.score ?? 0) - (a.doc.score ?? 0));
+  if (bm25ForceKept > 0) {
+    console.log(JSON.stringify({ event: "rerank_bm25_force_kept", count: bm25ForceKept }));
+  }
+
+  // Sort by effective score: reranker score + BM25 rank boost (inverse of rank)
+  // BM25 boost ensures keyword-matched docs aren't buried by Cohere's text-similarity scoring
+  const BM25_BOOST_MAX = 5; // max boost on 0-10 scale for BM25 rank 1
+  function effectiveScore(s: { doc: SearchResult; rerankScore: number }): number {
+    const bm25Rank = s.doc.bm25Rank;
+    const boost = bm25Rank != null && bm25Rank <= BM25_FORCE_KEEP_RANK
+      ? BM25_BOOST_MAX * (1 - bm25Rank / BM25_FORCE_KEEP_RANK)
+      : 0;
+    return s.rerankScore + boost;
+  }
+  scored.sort((a, b) => effectiveScore(b) - effectiveScore(a) || (b.doc.score ?? 0) - (a.doc.score ?? 0));
 
   // Cap at MAX_SUMMARIZE_DOCS to prevent excessive summarization time
   const cappedCount = Math.min(scored.length, MAX_SUMMARIZE_DOCS);

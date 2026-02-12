@@ -6,81 +6,70 @@
 
 ## What Works Now
 
-- **Three-phase pipeline** — Phase 1: search (LLM + Vectorize), Phase 1.5: rerank (Cohere or GPT-4o-mini), Phase 2: summarize (Service Binding)
+- **Hybrid search pipeline** — Vectorize (vector, 1536d) + PostgreSQL BM25 (keyword) → RRF fusion → Cohere rerank → summarize
+- **BM25 keyword search** — PostgreSQL + tsvector on 149,886 full documents. Finds docs that vector search misses (A1, B5).
+- **BM25 boost in reranker** — docs with high BM25 rank get sorting boost so they survive Cohere score + cap filtering
 - **Cohere rerank** — `rerank-v3.5` cross-encoder (if `COHERE_API_KEY` set), falls back to GPT-4o-mini batches
 - **Service Binding summarizer** — `cylaw-summarizer` Worker, solves 6-connection limit
 - **Summarizer research-value prompt** — decoupled engagement from relevance, MANDATORY OVERRIDES for foreign-law cases
 - **Score threshold** — retriever drops docs below 0.42 cosine and below 75% of best match
 - **Progressive UI** — progress bar during summarization, cards appear after completion
 - **court_level filter** — LLM filters by `supreme`, `appeal`, or `foreign`
-- **legal_context parameter** — LLM provides legal framework note for summarizer
 - **Light theme UI** — white background, Cypriot Greek interface (no English)
 - **Source cards** — ΕΥΡΗΜΑΤΑ ΔΙΚΑΣΤΗΡΙΟΥ section, relevance badge, court, year
 - **Document viewer** — click case to view full text, auto-appends .md
 - **Zero Trust auth** — email OTP, tracked in all logs
-- **Structured JSON logging** — sessionId + userEmail in all events
-- **Deduplication** — doc_ids tracked across searches via `seenDocIds` Set
-- **Court-level sorting** — Supreme > Appeal > First Instance > Administrative > Foreign
-- **NONE filtering** — irrelevant cases filtered after summarization
-- **Year filtering** — Vectorize metadata filter
-- **Re-embedded index** — `cyprus-law-cases-search-revised` with contextual headers, jurisdiction, cleaned text
-- **Test suite** — search, summarizer, E2E tests, deep-dive diagnostic, pipeline stage test
 - **Pre-commit hook** — TypeScript + ESLint
 - **Production** — https://cyprus-case-law.cylaw-study.workers.dev
 
 ## Current Problems
 
-- **OpenAI 800K TPM** — parallel batches can hit rate limit, some docs fail. User can retry.
-- **Hit rate ~15%** — A1 HIGH, A2 MEDIUM, A3 HIGH. B2 HIGH with Cohere. B4/B6 need Cohere testing.
-- **Embedding quality** — `text-embedding-3-small` finds similar words, not relevant cases. A4/B5 still not found by vector search.
-- **Reranker batch noise (GPT-4o-mini)** — same doc scored 1 or 5 depending on batch. Cohere rerank added but needs API key to test.
+- **Hit rate variable** — LLM query generation is non-deterministic. A1 HIGH, A3 HIGH stable. B-docs depend on which queries LLM picks.
+- **A4 still not found** — BM25 rank 1665, too low for RRF to surface. Needs better query terms or dedicated search.
+- **Cohere can't do legal reasoning** — scores A1/A2 as 0.0 (can't infer "Russian citizens = foreign law"). BM25 boost compensates.
+- **OpenAI 800K TPM** — parallel batches can hit rate limit. User can retry.
 
 ## What's Next
 
-See `docs/plan/search_quality_overhaul_v2.plan.md` for detailed plan.
-
 ### High Priority
-1. ~~**Phase 0: Weaviate cleanup**~~ — DONE: removed all Weaviate code, hardcoded Vectorize.
-2. ~~**Phase 1: Fix summarizer prompt**~~ — DONE: decoupled engagement from relevance, MANDATORY OVERRIDES. True positive A+B docs: 1 → 4.
-3. ~~**Phase 2a: Cohere rerank**~~ — DONE: `rerank-v3.5` via HTTP, GPT-4o-mini fallback. Needs `COHERE_API_KEY` for live testing.
-4. **Phase 2b: PostgreSQL + pgvector + hybrid search** — text-embedding-3-large (3072d), BM25 + vector via RRF. Target: find A4/B5, hit rate ≥50%.
+1. ~~**Phase 0: Weaviate cleanup**~~ — DONE
+2. ~~**Phase 1: Fix summarizer prompt**~~ — DONE
+3. ~~**Phase 2a: Cohere rerank**~~ — DONE
+4. ~~**Phase 2b: PostgreSQL + BM25 hybrid search**~~ — DONE (using existing 1536d embeddings via Vectorize + BM25 in PostgreSQL)
+5. **Phase 2b+: Re-embed with text-embedding-3-large (3072d)** — better vector quality, store in pgvector. Cost: ~$97.
+6. **Deploy hybrid search to production** — needs hosted PostgreSQL (Neon/Supabase)
 
 ### Medium Priority
-5. **Persistent summary cache** — KV or D1, avoid re-summarizing same doc
-6. **Query analytics dashboard** — leverage structured logs
-7. **Deploy new index to production** — switch `cyprus-law-cases-search-revised` on prod after testing
+7. **Persistent summary cache** — KV or D1, avoid re-summarizing same doc
+8. **Query analytics dashboard** — leverage structured logs
 
 ### Low Priority
-8. Legislation integration (64,477 acts from cylaw.org)
-9. CI/CD pipeline (GitHub Actions → Cloudflare deploy)
-10. Automated daily scrape for new cases
+9. Legislation integration (64,477 acts)
+10. CI/CD pipeline
+11. Automated daily scrape
 
 ## Gotchas
 
 ### Architecture
+- **Hybrid search** — Vectorize (chunk-level vector) + PostgreSQL (doc-level BM25) → RRF fusion (k=60) → Cohere rerank → GPT-4o summarize
+- **BM25 boost** — docs in top-50 BM25 get sorting boost in reranker (max 5.0 on 0-10 scale, inverse of rank)
 - **Service Binding** — each batch of 5 docs = separate call = fresh connection pool
-- **Three-phase pipeline** — LLM searches → Cohere/GPT-4o-mini reranks → GPT-4o summarizes. Source cards ARE the answer.
-- **Reranker** — Cohere: single HTTP call, 0-1 scores × 10. GPT-4o-mini: batches of 20, 0-10 scale. Both: keep >= 4, cap at 30.
-- **Summarizer prompt in English** — output in Greek, instructions in English (fewer hallucinations)
+- **Summarizer prompt in English** — output in Greek, instructions in English
 
 ### Technical
-- **ΝΟΜΙΚΗ ΠΤΥΧΗ extraction** — when present (~5400 docs), reranker preview and summarizer use the legal analysis section instead of ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ
-- **Workers 6 connection limit** — solved by Service Binding
+- **PostgreSQL** — Docker `pgvector/pgvector:pg17`, port 5432, db `cylaw`, 149,886 documents
+- **tsvector** — `to_tsvector('simple', content)` GENERATED ALWAYS STORED. Uses `simple` config (no Greek stemming).
+- **BM25 query** — OR logic (`word1 | word2 | word3`) for better recall
+- **RRF constant** — k=60 (standard), score = 1/(k + rank_vector) + 1/(k + rank_bm25)
+- **Cohere thresholds** — 0.1 (0-10 scale) vs GPT-4o-mini 4.0
+- **ΝΟΜΙΚΗ ΠΤΥΧΗ extraction** — when present (~5400 docs), reranker preview and summarizer use legal analysis section
 - **MAX_SUMMARIZE_DOCS=30** — safe with Service Binding
-- **Worker binding getByIds 20 ID limit** — both clients batch by 20
-- **Vectorize index**: `cyprus-law-cases-search-revised` (new, with headers/jurisdiction/cleaned text)
-- **Old production index**: `cyprus-law-cases-search` (still live on prod, do NOT delete yet)
-- **Vectorize topK**: `returnMetadata: "all"` → max 20. Use `"none"` + `getByIds()`
-- **Doc API auto-appends .md** — LLM often omits `.md`
-- `initOpenNextCloudflareForDev()` creates EMPTY miniflare R2 — use `r2FetchViaS3` for dev
-- R2 + Vectorize credentials in `frontend/.env.local` for dev
-- `extractDecisionText()` prefers ΝΟΜΙΚΗ ΠΤΥΧΗ when present, else ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ; truncates > 80K chars: 35% head + 65% tail
+- **Vectorize index**: `cyprus-law-cases-search-revised` (1536d, text-embedding-3-small)
+- `extractDecisionText()` prefers ΝΟΜΙΚΗ ΠΤΥΧΗ when present, else ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ; truncates > 80K chars
 
 ### Re-embedding Pipeline (scripts/batch_ingest.py)
 - Pipeline: `create-index` → `prepare` → `submit` → `status` → `download` → `upload`
-- 42 batch files, 2,071,079 vectors, ~$15 OpenAI cost
-- Download workers reduced to 3 (from 10) to avoid 504 timeouts
-- Retry logic with exponential backoff on download failures
+- 42 batch files, 2,071,079 vectors, ~$15 OpenAI cost (text-embedding-3-small)
 
 ## Test Suite
 
@@ -88,21 +77,18 @@ See `docs/plan/search_quality_overhaul_v2.plan.md` for detailed plan.
 |---------|------|------|
 | `npm test` | typecheck + lint + search + summarizer | Before deploy |
 | `npm run test:fast` | typecheck + lint (free, 3s) | After every change |
-| `npm run test:integration` | API tests (~$0.25) | Search/summarizer changes |
-| `npm run test:e2e` | Full pipeline E2E (~$5-10) | Architecture changes |
-| `node scripts/deep_dive_query.mjs` | Full pipeline diagnostic for one query | Debug search quality |
 | `node scripts/pipeline_stage_test.mjs` | Stage-by-stage ground-truth check | Search quality experiments |
+| `node scripts/deep_dive_query.mjs` | Full pipeline diagnostic | Debug search quality |
 
 ## Last Session Log
 
-### 2026-02-12 (session 17 — Cohere rerank live testing)
-- **Cohere rerank-v3.5** tested with real API key. Results:
-  - A2 HIGH, A3 HIGH. B3/B4/B6 kept (LOW). 90s total (vs 200s GPT-4o-mini).
-  - A1/B1/B2 scored 0.0 by Cohere — text similarity can't infer legal reasoning.
-  - Threshold tuned: 0.5 → 0.1 (0-10 scale). Preview size increased.
-- **Trade-off vs GPT-4o-mini**: faster, no batch noise, but loses A1/B1/B2.
-- **Logged as Run 3 + Run 4** in `docs/SEARCH_QUALITY_EXPERIMENT.md`.
-- All changes committed + pushed to origin/main (6 commits total this session).
-
-### 2026-02-12 (session 16 — Weaviate cleanup + MAX_SUMMARIZE_DOCS fix)
-- Weaviate removed, MAX_SUMMARIZE_DOCS 20→30, SSE kept flag fixed.
+### 2026-02-12 (session 17 — Phases 0-2b complete)
+- **Phase 0**: Weaviate removal. Committed + pushed.
+- **Phase 1**: Summarizer prompt decoupled engagement from relevance. True A+B positives: 1→4. Committed + pushed.
+- **Phase 2a**: Cohere rerank-v3.5 with GPT-4o-mini fallback. Tested live. Committed + pushed.
+- **Phase 2b**: PostgreSQL + BM25 hybrid search via RRF fusion.
+  - Docker pgvector/pgvector:pg17, 149,886 docs ingested (242 docs/s, 10 min).
+  - BM25 finds A1 (rank 2), A3 (rank 12), B5 (rank 30), A4 (rank 1665).
+  - BM25 boost in reranker: top-50 BM25 docs get sorting boost (max 5.0).
+  - Result: A1 promoted from "dropped" to **HIGH**. 61-79 sources (up from 50).
+- All phases committed + pushed to origin/main.

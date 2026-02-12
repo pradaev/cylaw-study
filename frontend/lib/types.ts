@@ -12,6 +12,7 @@ export interface SearchResult {
   year: string;
   text: string;
   score: number;
+  bm25Rank?: number;  // BM25 rank (1-based) from hybrid search, undefined if vector-only
 }
 
 export interface SSEEvent {
