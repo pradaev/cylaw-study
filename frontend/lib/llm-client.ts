@@ -541,42 +541,16 @@ async function rerankDocs(
   let totalOutputTokens = 0;
   let rerankBackend = "gpt-4o-mini";
 
-  const cohereKey = process.env.COHERE_API_KEY;
-  if (cohereKey) {
-    // ── Cohere rerank: single call, no batch noise ──
-    rerankBackend = "cohere";
-    try {
-      const documents = previews.map((p) => p.preview);
-      // Return ALL scores (not just top N) so BM25-found docs aren't silently dropped
-      const results = await cohereRerank(userQuery, documents);
-      // Cohere returns 0-1 scores; multiply by 10 for compatibility with 0-10 scale
-      for (const r of results) {
-        allScores.set(r.index, Math.round(r.score * 10 * 10) / 10); // one decimal
-      }
-      console.log(JSON.stringify({
-        event: "rerank_cohere",
-        inputDocs: previews.length,
-        resultsReturned: results.length,
-      }));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.log(JSON.stringify({ event: "rerank_cohere_error", error: msg }));
-      // Fall through to GPT-4o-mini fallback
-      rerankBackend = "gpt-4o-mini-fallback";
-    }
-  }
+  // ── Helper: score a batch of previews with GPT-4o-mini ──
+  async function gptScoreBatch(
+    batch: { idx: number; docId: string; preview: string }[],
+  ): Promise<Map<number, number>> {
+    const batchScores = new Map<number, number>();
+    const docList = batch
+      .map((p, localIdx) => `[DOC_${localIdx}] ${p.docId}\n${p.preview}`)
+      .join("\n---\n");
 
-  if (allScores.size === 0) {
-    // ── GPT-4o-mini fallback: score in batches of RERANK_BATCH_SIZE ──
-    for (let batchStart = 0; batchStart < previews.length; batchStart += RERANK_BATCH_SIZE) {
-      const batch = previews.slice(batchStart, batchStart + RERANK_BATCH_SIZE);
-
-      // Use LOCAL indices (0..N-1) in the prompt so GPT-4o-mini always returns 0-based idx
-      const docList = batch
-        .map((p, localIdx) => `[DOC_${localIdx}] ${p.docId}\n${p.preview}`)
-        .join("\n---\n");
-
-      const rerankPrompt = `You are a legal relevance scorer for Cypriot court decisions. The user's research question is:
+    const rerankPrompt = `You are a legal relevance scorer for Cypriot court decisions. The user's research question is:
 "${userQuery}"
 
 Below are ${batch.length} document previews. Each preview shows THREE parts:
@@ -595,6 +569,8 @@ SCORING TIPS:
 - The CONCLUSION section is most informative — it shows what the court actually decided
 - The JURISDICTION TYPE (e.g., ΠΕΡΙΟΥΣΙΑΚΩΝ ΔΙΑΦΟΡΩΝ, ΟΙΚΟΓΕΝΕΙΑΚΗ) is a strong signal
 - If you see legal terms/statutes from the query mentioned in the conclusion, score higher
+- Look for PARTY NAMES that suggest foreign elements (non-Greek names, Russian, English parties)
+- Cases involving cross-border assets, foreign law references, or international elements score higher for international law queries
 
 Respond with ONLY a JSON array of objects: [{"idx": 0, "score": 5}, {"idx": 1, "score": 2}, ...]
 No explanation, no markdown fencing, just the JSON array.
@@ -602,34 +578,111 @@ No explanation, no markdown fencing, just the JSON array.
 Documents:
 ${docList}`;
 
-      try {
-        const response = await client.chat.completions.create({
-          model: RERANK_MODEL,
-          messages: [{ role: "user", content: rerankPrompt }],
-          temperature: 0,
-          max_tokens: 2000,
-        });
+    try {
+      const response = await client.chat.completions.create({
+        model: RERANK_MODEL,
+        messages: [{ role: "user", content: rerankPrompt }],
+        temperature: 0,
+        max_tokens: 2000,
+      });
 
-        totalInputTokens += response.usage?.prompt_tokens ?? 0;
-        totalOutputTokens += response.usage?.completion_tokens ?? 0;
+      totalInputTokens += response.usage?.prompt_tokens ?? 0;
+      totalOutputTokens += response.usage?.completion_tokens ?? 0;
 
-        const rawOutput = response.choices[0]?.message?.content ?? "[]";
-        const jsonMatch = rawOutput.match(/\[[\s\S]*\]/);
-        if (!jsonMatch) {
-          console.log(JSON.stringify({ event: "rerank_parse_error", batch: batchStart, raw: rawOutput.slice(0, 200) }));
-          continue;
+      const rawOutput = response.choices[0]?.message?.content ?? "[]";
+      const jsonMatch = rawOutput.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        console.log(JSON.stringify({ event: "rerank_parse_error", raw: rawOutput.slice(0, 200) }));
+        return batchScores;
+      }
+
+      const scores: { idx: number; score: number }[] = JSON.parse(jsonMatch[0]);
+      for (const s of scores) {
+        if (s.idx >= 0 && s.idx < batch.length) {
+          batchScores.set(batch[s.idx].idx, s.score);
         }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(JSON.stringify({ event: "rerank_gpt_batch_error", error: msg }));
+    }
+    return batchScores;
+  }
 
-        const scores: { idx: number; score: number }[] = JSON.parse(jsonMatch[0]);
-        // Map LOCAL batch idx back to GLOBAL preview idx
-        for (const s of scores) {
-          if (s.idx >= 0 && s.idx < batch.length) {
-            allScores.set(batch[s.idx].idx, s.score);
+  const cohereKey = process.env.COHERE_API_KEY;
+  if (cohereKey) {
+    // ── Cohere rerank: single call, no batch noise ──
+    rerankBackend = "cohere";
+    try {
+      const documents = previews.map((p) => p.preview);
+      // Return ALL scores (not just top N) so BM25-found docs aren't silently dropped
+      const results = await cohereRerank(userQuery, documents);
+      // Cohere returns 0-1 scores; multiply by 10 for compatibility with 0-10 scale
+      for (const r of results) {
+        allScores.set(r.index, Math.round(r.score * 10 * 10) / 10); // one decimal
+      }
+      console.log(JSON.stringify({
+        event: "rerank_cohere",
+        inputDocs: previews.length,
+        resultsReturned: results.length,
+      }));
+
+      // ── Hybrid pass: GPT-4o-mini rescores docs that Cohere scored low ──
+      // Cohere can't do legal reasoning (e.g., "Russian citizens = foreign law").
+      // GPT-4o-mini can infer this but has batch noise with large batches.
+      // Solution: only send Cohere's low-scoring docs to GPT for a second opinion.
+      const COHERE_GPT_THRESHOLD = 1.0; // on 0-10 scale — rescore docs below this
+      const lowScoredPreviews = previews.filter(
+        (p) => (allScores.get(p.idx) ?? 0) < COHERE_GPT_THRESHOLD,
+      );
+
+      if (lowScoredPreviews.length > 0) {
+        rerankBackend = "cohere+gpt";
+        console.log(JSON.stringify({
+          event: "rerank_hybrid_gpt_pass",
+          lowScoredCount: lowScoredPreviews.length,
+          threshold: COHERE_GPT_THRESHOLD,
+        }));
+
+        // Score in batches of RERANK_BATCH_SIZE
+        for (let i = 0; i < lowScoredPreviews.length; i += RERANK_BATCH_SIZE) {
+          const batch = lowScoredPreviews.slice(i, i + RERANK_BATCH_SIZE);
+          const gptScores = await gptScoreBatch(batch);
+
+          // Merge: use max(cohereScore, gptScore) for each doc
+          let upgraded = 0;
+          for (const [idx, gptScore] of gptScores) {
+            const cohereScore = allScores.get(idx) ?? 0;
+            if (gptScore > cohereScore) {
+              allScores.set(idx, gptScore);
+              upgraded++;
+            }
+          }
+          if (upgraded > 0) {
+            console.log(JSON.stringify({
+              event: "rerank_hybrid_upgrades",
+              batchStart: i,
+              batchSize: batch.length,
+              upgraded,
+            }));
           }
         }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.log(JSON.stringify({ event: "rerank_batch_error", batch: batchStart, error: msg }));
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(JSON.stringify({ event: "rerank_cohere_error", error: msg }));
+      // Fall through to GPT-4o-mini fallback
+      rerankBackend = "gpt-4o-mini-fallback";
+    }
+  }
+
+  if (allScores.size === 0) {
+    // ── GPT-4o-mini full fallback (no Cohere key): score ALL docs in batches ──
+    for (let batchStart = 0; batchStart < previews.length; batchStart += RERANK_BATCH_SIZE) {
+      const batch = previews.slice(batchStart, batchStart + RERANK_BATCH_SIZE);
+      const batchScores = await gptScoreBatch(batch);
+      for (const [idx, score] of batchScores) {
+        allScores.set(idx, score);
       }
     }
   }
@@ -638,7 +691,11 @@ ${docList}`;
   //    Exception: docs with strong BM25 rank (from hybrid search) are force-kept
   //    even if Cohere scored them low — BM25 keyword match is a reliable signal.
   const BM25_FORCE_KEEP_RANK = 50; // force-keep docs in top 50 BM25 results
-  const minScore = rerankBackend === "cohere" ? RERANK_MIN_SCORE_COHERE : RERANK_MIN_SCORE_GPT;
+  // For hybrid (cohere+gpt), keep Cohere threshold — GPT rescoring lifts scores of
+  // rescued docs so they naturally sort higher. The MAX_SUMMARIZE_DOCS cap handles the rest.
+  const minScore = (rerankBackend === "cohere" || rerankBackend === "cohere+gpt")
+    ? RERANK_MIN_SCORE_COHERE
+    : RERANK_MIN_SCORE_GPT;
   const scored: { doc: SearchResult; rerankScore: number }[] = [];
   const dropped: string[] = [];
   let bm25ForceKept = 0;

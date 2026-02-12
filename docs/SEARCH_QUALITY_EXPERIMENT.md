@@ -404,3 +404,39 @@ Three distinct failure modes:
 - **Time**: 90s (55% faster)
 - **Cost**: ~$0.002 Cohere + ~$1.50 summarizer
 - **Next steps**: Phase 2b (PostgreSQL + BM25 hybrid search) to find A4/B5 and improve A1/B1/B2 retrieval
+
+### Run 5: 2026-02-12 (Hybrid Cohere + GPT-4o-mini reranker)
+- **Fixes applied**:
+  1. Two-pass reranking: Cohere first, then GPT-4o-mini rescores docs with Cohere score < 1.0
+  2. Use `max(cohereScore, gptScore)` as final score
+  3. Enhanced GPT prompt with party-name and cross-border scoring tips
+- **Queries generated**: 3 (facet-based)
+- **Sources found**: 74 (hybrid: Vectorize + BM25)
+- **After reranker (Cohere + GPT hybrid)**: 30 kept
+- **After summarizer**: 4 HIGH, 6 MEDIUM, 6 NONE
+
+  | ID | Vec Score | In Sources | Rerank (hybrid) | Kept? | Summarized | Relevance | Lost At |
+  |----|-----------|-----------|-----------------|-------|------------|-----------|---------|
+  | A1 | 0.029 | ✅ | 4 | ✅ | ✅ | **HIGH** | — |
+  | A2 | 0.020 | ✅ | 4 | ✅ | ✅ | **HIGH** | — |
+  | A3 | 0.014 | ✅ | 3.5 | ✅ | ✅ | **HIGH** | — |
+  | A4 | — | ❌ | — | — | ❌ | — | VECTOR SEARCH |
+  | B1 | 0.016 | ✅ | 4 | ❌ | ❌ | — | CAP (30 docs) |
+  | B2 | — | ✅ | 8 | ✅ | ✅ | **MEDIUM** | — |
+  | B3 | — | ✅ | 5 | ❌ | ❌ | — | CAP (30 docs) |
+  | B4 | 0.016 | ✅ | 2.2 | ❌ | ❌ | — | RERANKER (Cohere) |
+  | B5 | — | ❌ | — | — | ❌ | — | VECTOR SEARCH |
+  | B6 | 0.015 | ✅ | 1.7 | ❌ | ❌ | — | RERANKER (Cohere) |
+  | C1 | 0.027 | ✅ | 3.1 | ✅ | ✅ | OTHER | — |
+  | C2 | — | ❌ | — | — | ❌ | — | — |
+  | C3 | 0.015 | ✅ | 3.4 | ❌ | ❌ | — | RERANKER (Cohere) |
+
+- **Key improvements vs Run 4 (Cohere-only)**:
+  - **A1 rescued**: Cohere scored 0.0 → GPT scored 4 → kept + summarized as HIGH
+  - **B2 rescued**: Cohere scored 0.0 → GPT scored 8 → kept + summarized as MEDIUM
+  - **B1 rescued by GPT** (score 4) but capped at 30 docs
+  - **B3 rescued by GPT** (score 5) but capped at 30 docs
+  - **Hit rate**: 10/30 = **33%** (up from 7% Cohere-only, 15% GPT-only, 20% baseline)
+- **Time**: ~610s (longer due to dual reranker pass + BM25 hybrid)
+- **Best run so far**: highest hit rate, 3 A-docs + 1 B-doc correctly identified as HIGH/MEDIUM
+- **Remaining issues**: A4 and B5 not in vector search. B1/B3 found by GPT but capped at 30.
