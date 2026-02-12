@@ -1,8 +1,7 @@
 /**
- * Weaviate retriever — vector search with text-embedding-3-large (3072d).
+ * Weaviate retriever — hybrid search (vector + BM25) with text-embedding-3-large (3072d).
  *
- * Uses document-level embeddings. For hybrid (vector+BM25) we would need
- * Weaviate's vectorizer or a future API; for now vector-only.
+ * Combines semantic vector search with keyword BM25 on content/title.
  * Use when SEARCH_BACKEND=weaviate and WEAVIATE_URL is set.
  */
 
@@ -16,6 +15,8 @@ const TOP_K = 100;
 const MAX_DOCUMENTS = 30;
 const MIN_SCORE_THRESHOLD = 0.42;
 const SCORE_DROP_FACTOR = 0.75;
+/** Hybrid: alpha=1 pure vector, alpha=0 pure BM25. 0.7 = favor vector slightly. */
+const HYBRID_ALPHA = 0.7;
 
 interface WeaviateResult {
   doc_id?: string;
@@ -23,6 +24,11 @@ interface WeaviateResult {
   court?: string;
   year?: string;
   _additional?: { distance?: number; score?: string };
+}
+
+/** Escape query for GraphQL string (prevent injection). */
+function escapeGraphQLString(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
 }
 
 function buildWhereClause(courtLevel?: string): string | null {
@@ -55,21 +61,26 @@ export function createWeaviateSearchFn(weaviateUrl: string): SearchFn {
 
       const where = buildWhereClause(courtLevel);
       const whereStr = where ? `, where: ${where}` : "";
+      const escapedQuery = escapeGraphQLString(query);
 
+      // Hybrid: vector (semantic) + BM25 (keyword on content/title)
       const queryStr = `
         {
           Get {
             CourtCase(
               limit: ${TOP_K}
-              nearVector: {
+              hybrid: {
+                query: "${escapedQuery}"
                 vector: [${vector.join(",")}]
+                alpha: ${HYBRID_ALPHA}
+                properties: ["content", "title"]
               }${whereStr}
             ) {
               doc_id
               title
               court
               year
-              _additional { distance }
+              _additional { score }
             }
           }
         }
@@ -96,10 +107,9 @@ export function createWeaviateSearchFn(weaviateUrl: string): SearchFn {
         return [];
       }
 
-      // Cosine distance: lower = more similar. Convert to 0-1 score (1 - distance for cosine)
+      // Hybrid returns fused score (0-1, higher = better)
       const scored = items.map((o) => {
-        const dist = o._additional?.distance ?? 1;
-        const score = typeof dist === "number" ? Math.max(0, 1 - dist) : parseFloat(o._additional?.score ?? "0");
+        const score = parseFloat(o._additional?.score ?? "0");
         return {
           doc_id: o.doc_id ?? "",
           title: o.title ?? "",

@@ -27,24 +27,30 @@ def main() -> None:
     emb = client.embeddings.create(model=MODEL, input=query)
     vector = emb.data[0].embedding
 
-    # Full vector for GraphQL
+    # Hybrid: vector + BM25
     vec_str = ",".join(str(x) for x in vector)
+    escaped = query.replace('\\', '\\\\').replace('"', '\\"')
     query_gql = """
     {
       Get {
         CourtCase(
           limit: 5
-          nearVector: { vector: [%s] }
+          hybrid: {
+            query: "%s"
+            vector: [%s]
+            alpha: 0.7
+            properties: ["content", "title"]
+          }
         ) {
           doc_id
           title
           court
           year
-          _additional { distance }
+          _additional { score }
         }
       }
     }
-    """ % vec_str
+    """ % (escaped, vec_str)
 
     base = WEAVIATE_URL.rstrip("/")
     r = requests.post(
@@ -63,7 +69,7 @@ def main() -> None:
     print(f"Query: {query}")
     print(f"Results: {len(items)}")
     for i, o in enumerate(items, 1):
-        print(f"  {i}. {o.get('doc_id', '?')} | {o.get('title', '')[:50]}... | court={o.get('court')} year={o.get('year')} dist={o.get('_additional', {}).get('distance')}")
+        print(f"  {i}. {o.get('doc_id', '?')} | {o.get('title', '')[:50]}... | court={o.get('court')} year={o.get('year')} score={o.get('_additional', {}).get('score')}")
     if items:
         print("OK — Weaviate search works")
     else:

@@ -36,8 +36,20 @@
 | Embedding | text-embedding-3-small (1536d) | text-embedding-3-large (3072d) |
 | Granularity | Chunk-level | Document-level |
 | Content | Chunks with headers | ΝΟΜΙΚΗ ΠΤΥΧΗ → conclusion |
-| Search | Vector only | Vector only (BM25 hybrid needs vectorizer) |
+| Search | Vector only | Hybrid (vector + BM25 keyword) |
 
 ## Hybrid search
 
-Current schema uses `vectorizer: "none"` (bring your own vectors). For BM25 + vector hybrid, add `text2vec-openai` vectorizer to the schema.
+Weaviate uses hybrid search: vector (semantic) + BM25 (keyword on content/title). Alpha=0.7 favors vector slightly.
+
+## Quality comparison
+
+```bash
+# Start dev server first
+cd frontend && npm run dev
+
+# In another terminal
+node scripts/compare_search_backends.mjs
+```
+
+Compares ground-truth hit rate for Vectorize vs Weaviate.

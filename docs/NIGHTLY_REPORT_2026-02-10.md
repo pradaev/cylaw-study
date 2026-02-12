@@ -32,8 +32,13 @@ INFO:__main__:Done. Ingested 149886 documents to Weaviate
 
 With this config, the chat API uses Weaviate (document-level, 3072d) instead of Vectorize (chunk-level, 1536d).
 
-## Next Steps
+## Backend Comparison (2026-02-10)
 
-1. **Smoke test** — Run `cd frontend && npm run dev`, send a query, verify search hits Weaviate
-2. **Compare quality** — Same query on Vectorize vs Weaviate; compare hit rate
-3. **Hybrid BM25** — Optional: add text2vec-openai to schema for keyword + vector search
+Ground-truth query: αλλοδαπό δίκαιο, περιουσιακές διαφορές, διαζύγιο (foreign law, property disputes, divorce).
+
+| Backend | A (4 key) | B (6 related) | Total sources |
+|---------|-----------|----------------|---------------|
+| Vectorize | 3–4/4 | 5/6 | 50–64 |
+| Weaviate (hybrid) | 0/4 | 0/6 | 9–12 |
+
+**Vectorize wins** on this test query. Weaviate (document-level + hybrid) returns different docs — may need tuning (alpha, content weighting) or reflects chunk vs document granularity tradeoff.

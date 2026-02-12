@@ -149,7 +149,7 @@ if (isDev || isNodeRuntime) {
 }
 
 export async function POST(request: NextRequest) {
-  let body: { messages?: ChatMessage[]; model?: string; sessionId?: string };
+  let body: { messages?: ChatMessage[]; model?: string; sessionId?: string; searchBackendOverride?: string };
 
   try {
     body = await request.json();
@@ -160,6 +160,8 @@ export async function POST(request: NextRequest) {
   const messages = body.messages ?? [];
   const model = body.model ?? "gpt-4o";
   const sessionId = body.sessionId ?? "unknown";
+  /** Optional override for A/B comparison (vectorize | weaviate). Only in dev. */
+  const backendOverride = body.searchBackendOverride;
 
   // Get authenticated user email from Cloudflare Zero Trust
   const userEmail = request.headers.get("Cf-Access-Authenticated-User-Email") ?? "anonymous";
@@ -184,8 +186,12 @@ export async function POST(request: NextRequest) {
   }));
 
   // Search backend: weaviate (document-level, 3072d) or vectorize (chunk-level, 1536d)
-  const searchBackend = process.env.SEARCH_BACKEND ?? "vectorize";
+  const envBackend = process.env.SEARCH_BACKEND ?? "vectorize";
   const weaviateUrl = process.env.WEAVIATE_URL;
+  const searchBackend =
+    backendOverride && ["vectorize", "weaviate"].includes(backendOverride)
+      ? backendOverride
+      : envBackend;
 
   let searchFn;
   if (searchBackend === "weaviate" && weaviateUrl) {

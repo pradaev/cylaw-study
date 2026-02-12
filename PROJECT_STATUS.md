@@ -70,7 +70,7 @@
 - **MAX_DOCUMENTS=30** — safe with Service Binding
 - **Worker binding getByIds 20 ID limit** — both clients batch by 20
 - **Vectorize index**: `cyprus-law-cases-search-revised` (new, with headers/jurisdiction/cleaned text)
-- **Weaviate**: docker-compose, ingest_to_weaviate.py, CourtCase schema; 149,886 docs ingested (test: scripts/test_weaviate_search.py)
+- **Weaviate**: docker-compose, ingest_to_weaviate.py, CourtCase schema; 149,886 docs; hybrid (vector+BM25) alpha=0.7; compare: `node scripts/compare_search_backends.mjs`
 - **Old production index**: `cyprus-law-cases-search` (still live on prod, do NOT delete yet)
 - **Vectorize topK**: `returnMetadata: "all"` → max 20. Use `"none"` + `getByIds()`
 - **Doc API auto-appends .md** — LLM often omits `.md`
@@ -98,11 +98,15 @@
 
 ## Last Session Log
 
+### 2026-02-10 (session 15 — hybrid BM25 + backend comparison)
+- **Weaviate hybrid search** — vector + BM25 on content/title, alpha=0.7
+- **Backend comparison** — scripts/compare_search_backends.mjs; searchBackendOverride for A/B
+- Vectorize wins on ground-truth query (8–9/10 vs 0/10); Weaviate returns different docs
+- docs/NIGHTLY_REPORT_2026-02-10.md: comparison table
+
 ### 2026-02-10 (session 14 — nightly report + Weaviate complete)
 - **Weaviate full ingest DONE** — 149,886 docs, ~2h19m embed+upsert, 2998 batches
 - Smoke test: scripts/test_weaviate_search.py — OK
-- docs/NIGHTLY_REPORT_2026-02-10.md — overnight status
-- .env.local updated: SEARCH_BACKEND=weaviate, WEAVIATE_URL
 
 ### 2026-02-09 (session 13 — Weaviate full ingest + docs)
 - Started full ingest in background: `nohup python3 scripts/ingest_to_weaviate.py`
