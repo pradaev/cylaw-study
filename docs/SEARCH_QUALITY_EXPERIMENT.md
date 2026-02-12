@@ -519,3 +519,40 @@ Three distinct failure modes:
   - **More sources found** (121 vs 69-74) due to 6 diverse searches covering more facets
   - **Raw query search** ensures the user's exact phrasing is always included
 - **Remaining**: A4/B-docs need pgvector 3072d embeddings (currently in Vectorize 1536d only)
+
+### Run 9: 2026-02-12 (pgvector text-embedding-3-large 2000d)
+- **Fixes applied**:
+  1. Re-embedded all 1.92M chunks with `text-embedding-3-large` (3072d → truncated to 2000d for HNSW limit)
+  2. Uploaded to PostgreSQL `chunks` table with IVFFlat index (lists=1500, probes=30)
+  3. `pg-retriever.ts` uses pgvector for vector search instead of Cloudflare Vectorize (1536d)
+  4. Model dimension upgrade: 1536d (text-embedding-3-small) → 2000d (text-embedding-3-large, Matryoshka truncated)
+- **Searches**: 6+ (1 raw query + 5 LLM-generated facet queries)
+- **Sources found**: 133 (up from 121 with Vectorize)
+- **After reranker (Cohere + GPT hybrid)**: 30 kept (threshold ≥0.1)
+- **After summarizer**: 4 HIGH, 9 MEDIUM, 10 NONE
+
+  | ID | In Sources | Rerank (hybrid) | Kept? | Summarized | Relevance | Notes |
+  |----|-----------|-----------------|-------|------------|-----------|-------|
+  | A1 | ✅ | 6 | ✅ | ✅ | **HIGH** | Stable — best score yet |
+  | A2 | ✅ | 6 | ✅ | ✅ | **HIGH** | Stable — best score yet |
+  | A3 | ✅ | 3.5 | ❌ | ❌ | — | Found in sources but cut by 30-doc cap (more competition) |
+  | A4 | ❌ | — | — | ❌ | — | Still not found (Court of Appeal, different path structure) |
+  | B1 | ✅ | 0.2 | ❌ | ❌ | — | **NEW**: now found in sources (pgvector recall improvement!) |
+  | B2 | ✅ | 6 | ❌ | ❌ | — | **NEW**: now found with high rerank score (6) but cap limited |
+  | B3 | ✅ | 5 | ❌ | ❌ | — | **NEW**: found with good rerank score (5) but cap limited |
+  | B4 | ✅ | 2.2 | ❌ | ❌ | — | **NEW**: now found in sources |
+  | B5 | ❌ | — | — | ❌ | — | Still not found |
+  | B6 | ✅ | 1.7 | ❌ | ❌ | — | **NEW**: now found in sources |
+  | C1 | ✅ | 3.1 | ❌ | ❌ | — | Found but cut by cap |
+  | C2 | ❌ | — | — | ❌ | — | Not found |
+  | C3 | ✅ | 3.4 | ❌ | ❌ | — | Found but cut by cap |
+
+- **Hit rate**: (4+9)/30 = **43%** (down from 67% in Run 8)
+- **Key observations**:
+  - **Recall massively improved**: 10/13 ground truth docs found in sources (was 6/13 in Run 8)
+  - **5 B-docs now found** (B1, B2, B3, B4, B6) that were completely missing with Vectorize
+  - **Higher embedding quality** confirmed — text-embedding-3-large finds more semantically related docs
+  - **Hit rate decreased** because more sources (133 vs 121) means more competition for the 30-doc cap
+  - B2 and B3 scored 6 and 5 on rerank but still didn't make top 30 — the cap is the bottleneck
+  - A3 was kept in Run 8 but dropped here due to tighter competition
+- **Conclusion**: pgvector embeddings are a significant upgrade in recall. The 30-doc cap is now the limiting factor. Consider increasing cap or improving reranker to prioritize ground-truth-like docs.

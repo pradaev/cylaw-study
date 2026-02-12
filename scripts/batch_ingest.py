@@ -984,10 +984,17 @@ def step_upload_pg() -> None:
         print(f"  {total_inserted:>10,} chunks inserted ({rate:.0f}/s)", end="\r", flush=True)
         batch_buf.clear()
 
+    skipped_files = 0
     for ef in embedding_files:
         content_text = ef.read_text(encoding="utf-8")
         for line in content_text.strip().split("\n"):
-            resp = json.loads(line)
+            if not line.strip():
+                continue
+            try:
+                resp = json.loads(line)
+            except json.JSONDecodeError:
+                skipped_files += 1
+                continue
             response = resp.get("response", {})
             if response.get("status_code") != 200:
                 continue
@@ -998,8 +1005,9 @@ def step_upload_pg() -> None:
                 if idx >= len(meta_index):
                     continue
                 meta = meta_index[idx]
-                # Format embedding as PostgreSQL vector literal: [0.1,0.2,...]
-                vec_str = "[" + ",".join(f"{v:.8f}" for v in emb["embedding"]) + "]"
+                # Truncate 3072d → 2000d (Matryoshka-compatible) for HNSW index limit
+                truncated = emb["embedding"][:2000]
+                vec_str = "[" + ",".join(f"{v:.8f}" for v in truncated) + "]"
                 batch_buf.append((
                     meta["doc_id"],
                     meta["chunk_index"],
@@ -1022,10 +1030,12 @@ def step_upload_pg() -> None:
     elapsed = time.time() - t0
     print(f"\n  Total: {total_inserted:,} chunks inserted in {elapsed:.0f}s")
     print(f"  Rate: {total_inserted / elapsed:.0f} chunks/s")
+    if skipped_files > 0:
+        print(f"  Skipped {skipped_files} corrupted JSON lines")
 
-    # Build HNSW index
+    # Build HNSW index (2000d max for pgvector HNSW)
     print("\n  Building HNSW index on chunks.embedding (this may take 30-60 min)...")
-    print("  Parameters: m=16, ef_construction=200")
+    print("  Parameters: m=16, ef_construction=200, 2000 dimensions")
     idx_t0 = time.time()
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks
