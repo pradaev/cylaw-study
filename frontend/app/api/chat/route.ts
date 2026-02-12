@@ -18,7 +18,6 @@ import { chatStream, setFetchDocumentFn, setSessionId, setUserEmail } from "@/li
 import { localFetchDocument } from "@/lib/local-retriever";
 import { createVectorizeSearchFn } from "@/lib/retriever";
 import { createBindingClient, createHttpClient } from "@/lib/vectorize-client";
-import { createWeaviateSearchFn } from "@/lib/weaviate-retriever";
 import type { ChatMessage } from "@/lib/types";
 import type { FetchDocumentFn } from "@/lib/llm-client";
 
@@ -149,7 +148,7 @@ if (isDev || isNodeRuntime) {
 }
 
 export async function POST(request: NextRequest) {
-  let body: { messages?: ChatMessage[]; model?: string; sessionId?: string; searchBackendOverride?: string };
+  let body: { messages?: ChatMessage[]; model?: string; sessionId?: string };
 
   try {
     body = await request.json();
@@ -160,8 +159,6 @@ export async function POST(request: NextRequest) {
   const messages = body.messages ?? [];
   const model = body.model ?? "gpt-4o";
   const sessionId = body.sessionId ?? "unknown";
-  /** Optional override for A/B comparison (vectorize | weaviate). Only in dev. */
-  const backendOverride = body.searchBackendOverride;
 
   // Get authenticated user email from Cloudflare Zero Trust
   const userEmail = request.headers.get("Cf-Access-Authenticated-User-Email") ?? "anonymous";
@@ -185,28 +182,16 @@ export async function POST(request: NextRequest) {
     queryPreview: userQuery.slice(0, 200),
   }));
 
-  // Search backend: weaviate (document-level, 3072d) or vectorize (chunk-level, 1536d)
-  const envBackend = process.env.SEARCH_BACKEND ?? "vectorize";
-  const weaviateUrl = process.env.WEAVIATE_URL;
-  const searchBackend =
-    backendOverride && ["vectorize", "weaviate"].includes(backendOverride)
-      ? backendOverride
-      : envBackend;
-
-  let searchFn;
-  if (searchBackend === "weaviate" && weaviateUrl) {
-    searchFn = createWeaviateSearchFn(weaviateUrl);
-  } else {
-    const vectorizeClient =
-      isDev || isNodeRuntime
-        ? createHttpClient()
-        : await (async () => {
-            const { getCloudflareContext } = await import("@opennextjs/cloudflare");
-            const ctx = await getCloudflareContext({ async: true });
-            return createBindingClient(ctx.env as unknown as CloudflareEnv);
-          })();
-    searchFn = createVectorizeSearchFn(vectorizeClient);
-  }
+  // Search via Cloudflare Vectorize (chunk-level, text-embedding-3-small 1536d)
+  const vectorizeClient =
+    isDev || isNodeRuntime
+      ? createHttpClient()
+      : await (async () => {
+          const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+          const ctx = await getCloudflareContext({ async: true });
+          return createBindingClient(ctx.env as unknown as CloudflareEnv);
+        })();
+  const searchFn = createVectorizeSearchFn(vectorizeClient);
 
   // Get Summarizer binding (Cloudflare Workers only; Node uses direct OpenAI)
   let summarizerBinding: Fetcher | undefined;

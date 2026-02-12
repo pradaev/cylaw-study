@@ -422,7 +422,7 @@ const RERANK_MODEL = "gpt-4o-mini";
 const RERANK_MIN_SCORE = 4;           // 0-10 scale; keep docs scoring >= 4
 const RERANK_MAX_DOCS_IN = 90;        // max docs to send to reranker (3 searches × 30 docs)
 const RERANK_BATCH_SIZE = 20;         // score in batches of 20 to prevent attention degradation
-const MAX_SUMMARIZE_DOCS = 20;        // hard cap: max docs to send to GPT-4o summarizer
+const MAX_SUMMARIZE_DOCS = 30;        // hard cap: max docs to send to GPT-4o summarizer
 const RERANK_HEAD_CHARS = 300;        // chars from document head (title, parties)
 const RERANK_DECISION_CHARS = 600;    // chars from start of decision text
 const RERANK_TAIL_CHARS = 800;        // chars from end (ruling/conclusion)
@@ -611,11 +611,12 @@ ${docList}`;
   const kept = scored.slice(0, cappedCount).map((s) => s.doc);
   const cappedDocs = scored.length - cappedCount;
 
-  // Build score details for logging and SSE
+  // Build score details for logging and SSE — 'kept' reflects actual cap, not just score threshold
+  const keptDocIds = new Set(kept.map((d) => d.doc_id));
   const scoreDetails = previews.map((p) => ({
     doc_id: p.docId,
     rerank_score: allScores.get(p.idx) ?? 0,
-    kept: (allScores.get(p.idx) ?? 0) >= RERANK_MIN_SCORE,
+    kept: keptDocIds.has(p.docId),
   }));
 
   console.log(JSON.stringify({

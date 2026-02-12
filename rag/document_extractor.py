@@ -29,7 +29,7 @@ MAX_CONTENT_CHARS = 3500  # ~900 tokens (Greek ~0.4 chars/token), safe for text-
 
 @dataclass
 class DocumentRecord:
-    """Single document ready for embedding + Weaviate upsert."""
+    """Single document ready for embedding and vector store upsert."""
 
     doc_id: str
     content: str      # text for embedding + BM25
