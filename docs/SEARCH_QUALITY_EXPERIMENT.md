@@ -331,3 +331,76 @@ Three distinct failure modes:
 - **Hit rate**: 6/30 = 20% (up from 13%)
 - **Time**: 200s (up from 134s due to more docs summarized)
 - **Next steps**: Tune summarizer prompt, consider hybrid search for A4/B5
+
+### Run 3: 2026-02-12 (Phase 1 — summarizer prompt fix, GPT-4o-mini reranker)
+- **Fixes applied**:
+  1. Summarizer RELEVANCE RATING decoupled from engagement level
+  2. MANDATORY OVERRIDES: foreign-law + cross-border elements → at least MEDIUM
+  3. Domestic cases (Cypriot parties, no foreign element) → LOW
+  4. MAX_SUMMARIZE_DOCS increased from 20 to 30
+- **Queries generated**: 3 (facet-based)
+- **Sources found**: 53
+- **After reranker (GPT-4o-mini)**: 27 kept
+- **After summarizer**: 2 HIGH, 1 MEDIUM
+
+  | ID | Vec Score | In Sources | Rerank | Kept? | Summarized | Relevance | Lost At |
+  |----|-----------|-----------|--------|-------|------------|-----------|---------|
+  | A1 | 0.422 | ✅ | 6 | ✅ | ✅ | **HIGH** | — |
+  | A2 | 0.420 | ✅ | 6 | ✅ | ✅ | **MEDIUM** | — |
+  | A3 | 0.431 | ✅ | 5 | ✅ | ✅ | **HIGH** | — |
+  | A4 | 0.474 | ✅ | 1 | ❌ | ❌ | — | RERANKER (batch noise) |
+  | B1 | 0.453 | ✅ | 1 | ❌ | ❌ | — | RERANKER (batch noise) |
+  | B2 | 0.421 | ✅ | 8 | ✅ | ✅ | **HIGH** | — |
+  | B3 | 0.491 | ✅ | 1 | ❌ | ❌ | — | RERANKER (batch noise) |
+  | B4 | 0.451 | ✅ | 5 | ✅ | ✅ | LOW | — |
+  | B5 | — | ❌ | — | — | ❌ | — | VECTOR SEARCH |
+  | B6 | 0.442 | ✅ | 6 | ✅ | ✅ | LOW | — |
+  | C1 | 0.429 | ✅ | 5 | ✅ | ✅ | LOW | — (correct) |
+  | C2 | — | ❌ | — | — | ❌ | — | — |
+  | C3 | 0.439 | ✅ | 5 | ✅ | ✅ | LOW | — (correct) |
+
+- **Key improvement**: True positive A+B docs rated HIGH/MEDIUM: 1 → 4 (A1 HIGH, A2 MEDIUM, A3 HIGH, B2 HIGH)
+- **C-doc false positives eliminated** (were HIGH in Run 2, now correctly LOW)
+- **Remaining issues**: GPT-4o-mini batch noise — A4, B1, B3 scored 1 (should be 4-6)
+- **Hit rate (HIGH+MEDIUM)**: 4/27 = 15%
+- **Time**: 198s
+
+### Run 4: 2026-02-12 (Phase 2a — Cohere rerank-v3.5)
+- **Fixes applied**:
+  1. Cohere rerank-v3.5 replaces GPT-4o-mini (cross-encoder, no batch noise)
+  2. Preview size increased: head 300→500, decision 600→2000, tail 800→1500 chars
+  3. Separate thresholds: GPT-4o-mini ≥4, Cohere ≥0.1 (0-10 scale)
+  4. Cohere `top_n=30` to limit returned results
+- **Queries generated**: 3 (facet-based)
+- **Sources found**: 50
+- **After reranker (Cohere)**: 30 kept (threshold ≥0.1)
+- **After summarizer**: 2 HIGH
+
+  | ID | Vec Score | In Sources | Rerank (Cohere 0-10) | Kept? | Summarized | Relevance | Lost At |
+  |----|-----------|-----------|---------------------|-------|------------|-----------|---------|
+  | A1 | 0.422 | ✅ | 0.0 | ❌ | ❌ | — | RERANKER (Cohere can't infer) |
+  | A2 | 0.420 | ✅ | 0.3 | ✅ | ✅ | **HIGH** | — |
+  | A3 | 0.431 | ✅ | 3.5 | ✅ | ✅ | **HIGH** | — |
+  | A4 | — | ❌ | — | — | ❌ | — | VECTOR SEARCH |
+  | B1 | 0.453 | ✅ | 0.0 | ❌ | ❌ | — | RERANKER (Cohere can't infer) |
+  | B2 | 0.421 | ✅ | 0.0 | ❌ | ❌ | — | RERANKER (Cohere can't infer) |
+  | B3 | 0.473 | ✅ | 0.8 | ✅ | ✅ | LOW | — |
+  | B4 | 0.451 | ✅ | 2.2 | ✅ | ✅ | LOW | — |
+  | B5 | — | ❌ | — | — | ❌ | — | VECTOR SEARCH |
+  | B6 | 0.442 | ✅ | 1.7 | ✅ | ✅ | LOW | — |
+  | C1 | 0.429 | ✅ | 3.1 | ✅ | ✅ | LOW | — (correct) |
+  | C2 | — | ❌ | — | — | ❌ | — | — |
+  | C3 | 0.439 | ✅ | 3.4 | ✅ | ✅ | LOW | — (correct) |
+
+- **Key trade-offs vs GPT-4o-mini**:
+  - **Faster**: 90s total (vs 200s with GPT-4o-mini) — single API call
+  - **No batch noise**: scores are deterministic and consistent
+  - **A2 upgraded**: HIGH (was MEDIUM with GPT-4o-mini)
+  - **B3 kept**: consistently kept (GPT-4o-mini dropped it due to batch noise)
+  - **Lost**: A1 (scored 0.0), B1/B2 (scored 0.0) — Cohere can't infer legal connection from preview text
+  - **B5 appeared** in some runs (vector search found it at 0.460)
+- **Cohere limitation**: Text similarity model, not legal reasoning. Can't infer "Russian citizens + property = foreign law case" from preview alone.
+- **Hit rate (HIGH+MEDIUM)**: 2/30 = 7% (lower than GPT-4o-mini, but no false positives)
+- **Time**: 90s (55% faster)
+- **Cost**: ~$0.002 Cohere + ~$1.50 summarizer
+- **Next steps**: Phase 2b (PostgreSQL + BM25 hybrid search) to find A4/B5 and improve A1/B1/B2 retrieval

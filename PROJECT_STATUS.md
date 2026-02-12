@@ -95,16 +95,14 @@ See `docs/plan/search_quality_overhaul_v2.plan.md` for detailed plan.
 
 ## Last Session Log
 
-### 2026-02-12 (session 17 — Phase 0+1+2a: summarizer + Cohere rerank)
-- **Phase 0** committed: Weaviate removal + MAX_SUMMARIZE_DOCS 20→30
-- **Phase 1** committed: Summarizer prompt decoupled engagement from relevance. MANDATORY OVERRIDES: foreign-law + cross-border = MEDIUM. True A+B positives: 1 → 4. C-doc false positives eliminated.
-- **Phase 2a** committed: Cohere rerank-v3.5 via HTTP fetch (no npm dep), GPT-4o-mini fallback. Needs `COHERE_API_KEY` in `.env.local` to activate.
-- Test results (GPT-4o-mini fallback): A1 HIGH, A2 MEDIUM, A3 HIGH, B2 HIGH. B4/B6 "?" (likely LOW). C1/C3 LOW.
-- All 3 phases committed + pushed to origin/main.
+### 2026-02-12 (session 17 — Cohere rerank live testing)
+- **Cohere rerank-v3.5** tested with real API key. Results:
+  - A2 HIGH, A3 HIGH. B3/B4/B6 kept (LOW). 90s total (vs 200s GPT-4o-mini).
+  - A1/B1/B2 scored 0.0 by Cohere — text similarity can't infer legal reasoning.
+  - Threshold tuned: 0.5 → 0.1 (0-10 scale). Preview size increased.
+- **Trade-off vs GPT-4o-mini**: faster, no batch noise, but loses A1/B1/B2.
+- **Logged as Run 3 + Run 4** in `docs/SEARCH_QUALITY_EXPERIMENT.md`.
+- All changes committed + pushed to origin/main (6 commits total this session).
 
 ### 2026-02-12 (session 16 — Weaviate cleanup + MAX_SUMMARIZE_DOCS fix)
-- **Weaviate removed** — deleted 8 files, cleaned route.ts/env/docs. Hardcoded Vectorize.
-- **MAX_SUMMARIZE_DOCS** 20 → 30 — cap of 20 was dropping A1/A2 after reranker. Fixed.
-- **SSE `kept` flag** — now reflects actual summarization list, not just score threshold.
-- Pipeline test: 57 sources → 30 summarized, A1 HIGH, A2 MEDIUM, A3 HIGH. Hit rate 10%.
-- C2/C3 false positives fixed (were HIGH in Run 2, now correctly NONE).
+- Weaviate removed, MAX_SUMMARIZE_DOCS 20→30, SSE kept flag fixed.
