@@ -14,6 +14,7 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import type { ChatMessage, ModelConfig, SearchResult, UsageData } from "./types";
 import { MODELS, COURT_NAMES } from "./types";
+import { cohereRerank } from "./cohere-reranker";
 
 const MAX_TOOL_ROUNDS = 10;
 const SUMMARIZER_MODEL = "gpt-4o";
@@ -533,21 +534,47 @@ async function rerankDocs(
 
   if (previews.length === 0) return docs;
 
-  // 2. Score in batches of RERANK_BATCH_SIZE to prevent attention degradation
-  //    Large batches (60+) cause GPT-4o-mini to lose calibration and score everything low.
+  // 2. Score documents — Cohere rerank (preferred) or GPT-4o-mini batches (fallback)
   const allScores = new Map<number, number>();
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  let rerankBackend = "gpt-4o-mini";
 
-  for (let batchStart = 0; batchStart < previews.length; batchStart += RERANK_BATCH_SIZE) {
-    const batch = previews.slice(batchStart, batchStart + RERANK_BATCH_SIZE);
+  const cohereKey = process.env.COHERE_API_KEY;
+  if (cohereKey) {
+    // ── Cohere rerank: single call, no batch noise ──
+    rerankBackend = "cohere";
+    try {
+      const documents = previews.map((p) => p.preview);
+      const results = await cohereRerank(userQuery, documents);
+      // Cohere returns 0-1 scores; multiply by 10 for compatibility with 0-10 scale
+      for (const r of results) {
+        allScores.set(r.index, Math.round(r.score * 10 * 10) / 10); // one decimal
+      }
+      console.log(JSON.stringify({
+        event: "rerank_cohere",
+        inputDocs: previews.length,
+        resultsReturned: results.length,
+      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(JSON.stringify({ event: "rerank_cohere_error", error: msg }));
+      // Fall through to GPT-4o-mini fallback
+      rerankBackend = "gpt-4o-mini-fallback";
+    }
+  }
 
-    // Use LOCAL indices (0..N-1) in the prompt so GPT-4o-mini always returns 0-based idx
-    const docList = batch
-      .map((p, localIdx) => `[DOC_${localIdx}] ${p.docId}\n${p.preview}`)
-      .join("\n---\n");
+  if (allScores.size === 0) {
+    // ── GPT-4o-mini fallback: score in batches of RERANK_BATCH_SIZE ──
+    for (let batchStart = 0; batchStart < previews.length; batchStart += RERANK_BATCH_SIZE) {
+      const batch = previews.slice(batchStart, batchStart + RERANK_BATCH_SIZE);
 
-    const rerankPrompt = `You are a legal relevance scorer for Cypriot court decisions. The user's research question is:
+      // Use LOCAL indices (0..N-1) in the prompt so GPT-4o-mini always returns 0-based idx
+      const docList = batch
+        .map((p, localIdx) => `[DOC_${localIdx}] ${p.docId}\n${p.preview}`)
+        .join("\n---\n");
+
+      const rerankPrompt = `You are a legal relevance scorer for Cypriot court decisions. The user's research question is:
 "${userQuery}"
 
 Below are ${batch.length} document previews. Each preview shows THREE parts:
@@ -573,34 +600,35 @@ No explanation, no markdown fencing, just the JSON array.
 Documents:
 ${docList}`;
 
-    try {
-      const response = await client.chat.completions.create({
-        model: RERANK_MODEL,
-        messages: [{ role: "user", content: rerankPrompt }],
-        temperature: 0,
-        max_tokens: 2000,
-      });
+      try {
+        const response = await client.chat.completions.create({
+          model: RERANK_MODEL,
+          messages: [{ role: "user", content: rerankPrompt }],
+          temperature: 0,
+          max_tokens: 2000,
+        });
 
-      totalInputTokens += response.usage?.prompt_tokens ?? 0;
-      totalOutputTokens += response.usage?.completion_tokens ?? 0;
+        totalInputTokens += response.usage?.prompt_tokens ?? 0;
+        totalOutputTokens += response.usage?.completion_tokens ?? 0;
 
-      const rawOutput = response.choices[0]?.message?.content ?? "[]";
-      const jsonMatch = rawOutput.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        console.log(JSON.stringify({ event: "rerank_parse_error", batch: batchStart, raw: rawOutput.slice(0, 200) }));
-        continue;
-      }
-
-      const scores: { idx: number; score: number }[] = JSON.parse(jsonMatch[0]);
-      // Map LOCAL batch idx back to GLOBAL preview idx
-      for (const s of scores) {
-        if (s.idx >= 0 && s.idx < batch.length) {
-          allScores.set(batch[s.idx].idx, s.score);
+        const rawOutput = response.choices[0]?.message?.content ?? "[]";
+        const jsonMatch = rawOutput.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) {
+          console.log(JSON.stringify({ event: "rerank_parse_error", batch: batchStart, raw: rawOutput.slice(0, 200) }));
+          continue;
         }
+
+        const scores: { idx: number; score: number }[] = JSON.parse(jsonMatch[0]);
+        // Map LOCAL batch idx back to GLOBAL preview idx
+        for (const s of scores) {
+          if (s.idx >= 0 && s.idx < batch.length) {
+            allScores.set(batch[s.idx].idx, s.score);
+          }
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(JSON.stringify({ event: "rerank_batch_error", batch: batchStart, error: msg }));
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.log(JSON.stringify({ event: "rerank_batch_error", batch: batchStart, error: msg }));
     }
   }
 
@@ -637,8 +665,9 @@ ${docList}`;
     event: "rerank_complete",
     sessionId: _sessionId,
     userEmail: _userEmail,
+    backend: rerankBackend,
     inputDocs: previews.length,
-    batches: Math.ceil(previews.length / RERANK_BATCH_SIZE),
+    batches: rerankBackend === "cohere" ? 1 : Math.ceil(previews.length / RERANK_BATCH_SIZE),
     keptByScore: scored.length,
     cappedTo: cappedCount,
     dropped: dropped.length,
