@@ -440,3 +440,28 @@ Three distinct failure modes:
 - **Time**: ~610s (longer due to dual reranker pass + BM25 hybrid)
 - **Best run so far**: highest hit rate, 3 A-docs + 1 B-doc correctly identified as HIGH/MEDIUM
 - **Remaining issues**: A4 and B5 not in vector search. B1/B3 found by GPT but capped at 30.
+
+### Run 6: 2026-02-12 (Summarizer temperature 0)
+- **Fixes applied**: `temperature: 0.1` → `0` in both `llm-client.ts` and `summarizer-worker/src/index.ts`
+- **Queries generated**: 3 (facet-based)
+- **Sources found**: 71 (hybrid)
+- **After reranker (Cohere + GPT hybrid)**: 30 kept
+- **After summarizer**: 5 HIGH, 4 MEDIUM, 7 NONE
+
+  | ID | In Sources | Rerank (hybrid) | Kept? | Summarized | Relevance | Notes |
+  |----|-----------|-----------------|-------|------------|-----------|-------|
+  | A1 | ✅ | 4 | ✅ | ✅ | **HIGH** | — |
+  | A2 | ✅ | 5 | ✅ | ✅ | **HIGH** | Up from MEDIUM in Run 5 |
+  | A3 | ✅ | 3.5 | ✅ | ✅ | **HIGH** | Stable |
+  | A4 | ❌ | — | — | ❌ | — | Still not in vector search |
+  | B1 | ❌ | — | — | ❌ | — | Appeared in Run 5 but not here (LLM query variance) |
+  | B2 | ❌ | — | — | ❌ | — | Same — query variance |
+  | B3 | ❌ | — | — | ❌ | — | Not in sources |
+  | B4 | ✅ | 2.2 | ✅ | ✅ | OTHER | — |
+  | B5 | ❌ | — | — | ❌ | — | Not in sources |
+  | B6 | ❌ | — | — | ❌ | — | Not in sources |
+  | C1 | ✅ | 3.1 | ✅ | ✅ | OTHER | — |
+
+- **Hit rate**: ~30% (within variance of Run 5's 33%)
+- **Key observation**: Temperature change from 0.1→0 has minimal impact on ratings (expected — 0.1 was already near-deterministic). Main benefit: truly deterministic summarizer outputs across runs.
+- **LLM query variance** explains B1/B2 not appearing — different queries generated this run found different docs. Multi-query expansion (Item 8) should stabilize this.

@@ -57,8 +57,8 @@ logger = logging.getLogger(__name__)
 
 # ── Config ──────────────────────────────────────────────────────────
 
-OPENAI_MODEL = "text-embedding-3-small"
-OPENAI_DIMS = 1536
+OPENAI_MODEL = "text-embedding-3-large"
+OPENAI_DIMS = 3072
 VECTORIZE_INDEX_DEFAULT = "cyprus-law-cases-search-revised"
 VECTORIZE_INDEX = VECTORIZE_INDEX_DEFAULT  # overridden by --index CLI arg
 CF_API_BASE = "https://api.cloudflare.com/client/v4"
@@ -233,7 +233,7 @@ def step_prepare(court: Optional[str] = None, limit: Optional[int] = None) -> No
 
     print(f"  {len(all_chunks):,} chunks in {time.time() - t0:.1f}s")
 
-    # Save metadata index (without text — just for Vectorize upload later)
+    # Save metadata index (with text for pgvector upload)
     print(f"\n[2/3] Saving metadata index...")
     with open(META_FILE, "w", encoding="utf-8") as mf:
         for i, chunk in enumerate(tqdm(all_chunks, desc="Metadata", unit="ch")):
@@ -247,6 +247,7 @@ def step_prepare(court: Optional[str] = None, limit: Optional[int] = None) -> No
                 "court_level": chunk.get("court_level", _detect_court_level(chunk["court"])),
                 "subcourt": chunk.get("subcourt", _detect_subcourt(chunk["doc_id"], chunk["court"])),
                 "jurisdiction": chunk.get("jurisdiction", ""),
+                "text": chunk["text"],  # chunk text for pgvector upload
             }
             mf.write(json.dumps(meta, ensure_ascii=False) + "\n")
 
@@ -275,6 +276,7 @@ def step_prepare(court: Optional[str] = None, limit: Optional[int] = None) -> No
                     "body": {
                         "model": OPENAI_MODEL,
                         "input": texts,
+                        "dimensions": OPENAI_DIMS,
                     },
                 }
                 bf.write(json.dumps(line, ensure_ascii=False) + "\n")
@@ -887,6 +889,162 @@ def step_run(court: Optional[str] = None, limit: Optional[int] = None) -> None:
         step_collect()
 
 
+# ── PostgreSQL pgvector upload ────────────────────────────────────────
+
+def step_upload_pg() -> None:
+    """Upload downloaded embeddings to PostgreSQL pgvector chunks table.
+
+    Reads embedding files from data/batch_embed/embeddings/ and metadata
+    from chunks_meta.jsonl, then bulk-inserts into the chunks table using COPY.
+    """
+    import io
+    try:
+        import psycopg2
+    except ImportError:
+        print("ERROR: psycopg2 not installed. Run: pip install psycopg2-binary")
+        return
+
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        print("ERROR: DATABASE_URL not set")
+        return
+
+    state = load_state()
+    if state["phase"] not in ("submitted", "collecting", "done"):
+        print(f"Current phase: {state['phase']}. Run download first.")
+        return
+
+    # Load metadata index
+    if not META_FILE.exists():
+        print(f"No metadata file at {META_FILE}. Run prepare first.")
+        return
+
+    print(f"\nLoading metadata index from {META_FILE}...")
+    meta_index = []
+    with open(META_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            meta_index.append(json.loads(line))
+    print(f"  {len(meta_index):,} chunks in metadata index")
+
+    # Collect embedding files
+    embedding_files = sorted(EMBEDDINGS_DIR.glob("*_embeddings.jsonl"))
+    if not embedding_files:
+        print(f"No embedding files in {EMBEDDINGS_DIR}/. Run download first.")
+        return
+    print(f"  {len(embedding_files)} embedding files found")
+
+    # Connect to PostgreSQL
+    conn = psycopg2.connect(database_url)
+    conn.autocommit = False
+    cur = conn.cursor()
+
+    # Check if chunks table exists
+    cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'chunks')")
+    if not cur.fetchone()[0]:
+        print("ERROR: chunks table does not exist. Run pg_schema.sql first.")
+        conn.close()
+        return
+
+    # Truncate existing data
+    cur.execute("SELECT COUNT(*) FROM chunks")
+    existing = cur.fetchone()[0]
+    if existing > 0:
+        print(f"  Truncating {existing:,} existing chunks...")
+        cur.execute("TRUNCATE chunks")
+        conn.commit()
+
+    # Process each embedding file
+    total_inserted = 0
+    COPY_BATCH = 5000
+    batch_buf = []
+    t0 = time.time()
+
+    columns = ("doc_id", "chunk_index", "content", "embedding",
+               "court", "court_level", "year", "title", "subcourt", "jurisdiction")
+
+    def flush_batch():
+        nonlocal total_inserted
+        if not batch_buf:
+            return
+        buf = io.StringIO()
+        for row in batch_buf:
+            # Tab-separated, with proper escaping for COPY
+            line_parts = []
+            for val in row:
+                s = str(val)
+                s = s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+                line_parts.append(s)
+            buf.write("\t".join(line_parts) + "\n")
+        buf.seek(0)
+        cur.copy_from(buf, "chunks", columns=columns)
+        conn.commit()
+        total_inserted += len(batch_buf)
+        elapsed = time.time() - t0
+        rate = total_inserted / elapsed if elapsed > 0 else 0
+        print(f"  {total_inserted:>10,} chunks inserted ({rate:.0f}/s)", end="\r", flush=True)
+        batch_buf.clear()
+
+    for ef in embedding_files:
+        content_text = ef.read_text(encoding="utf-8")
+        for line in content_text.strip().split("\n"):
+            resp = json.loads(line)
+            response = resp.get("response", {})
+            if response.get("status_code") != 200:
+                continue
+            parts = resp["custom_id"].split("-")
+            global_start = int(parts[2][1:])
+            for emb in response["body"]["data"]:
+                idx = global_start + emb["index"]
+                if idx >= len(meta_index):
+                    continue
+                meta = meta_index[idx]
+                # Format embedding as PostgreSQL vector literal: [0.1,0.2,...]
+                vec_str = "[" + ",".join(f"{v:.8f}" for v in emb["embedding"]) + "]"
+                batch_buf.append((
+                    meta["doc_id"],
+                    meta["chunk_index"],
+                    meta.get("text", ""),  # chunk text
+                    vec_str,
+                    meta["court"],
+                    meta.get("court_level", _detect_court_level(meta["court"])),
+                    meta["year"],
+                    meta["title"],
+                    meta.get("subcourt", _detect_subcourt(meta["doc_id"], meta["court"])),
+                    meta.get("jurisdiction", ""),
+                ))
+                if len(batch_buf) >= COPY_BATCH:
+                    flush_batch()
+
+    # Flush remaining
+    flush_batch()
+    print()
+
+    elapsed = time.time() - t0
+    print(f"\n  Total: {total_inserted:,} chunks inserted in {elapsed:.0f}s")
+    print(f"  Rate: {total_inserted / elapsed:.0f} chunks/s")
+
+    # Build HNSW index
+    print("\n  Building HNSW index on chunks.embedding (this may take 30-60 min)...")
+    print("  Parameters: m=16, ef_construction=200")
+    idx_t0 = time.time()
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks
+          USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 200)
+    """)
+    conn.commit()
+    idx_elapsed = time.time() - idx_t0
+    print(f"  HNSW index built in {idx_elapsed:.0f}s")
+
+    # Analyze
+    print("  Running ANALYZE chunks...")
+    cur.execute("ANALYZE chunks")
+    conn.commit()
+
+    cur.close()
+    conn.close()
+    print(f"\nDone! {total_inserted:,} chunks with {OPENAI_DIMS}d embeddings in pgvector.")
+
+
 # ── CLI ─────────────────────────────────────────────────────────────
 
 def main():
@@ -896,7 +1054,7 @@ def main():
     parser.add_argument(
         "command",
         choices=[
-            "prepare", "submit", "status", "download", "upload",
+            "prepare", "submit", "status", "download", "upload", "upload-pg",
             "create-index", "collect", "reupload", "full-reset", "run", "reset",
         ],
         help="Pipeline step to run",
@@ -946,6 +1104,8 @@ def main():
         step_upload()
     elif args.command == "collect":
         step_collect()
+    elif args.command == "upload-pg":
+        step_upload_pg()
     elif args.command == "reupload":
         step_reupload()
     elif args.command == "run":

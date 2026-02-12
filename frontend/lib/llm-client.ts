@@ -413,7 +413,7 @@ Document ID: ${docId}`;
       { role: "system", content: systemPrompt },
       { role: "user", content: extractDecisionText(fullText, 80000) },
     ],
-    temperature: 0.1,
+    temperature: 0,
     max_tokens: SUMMARIZER_MAX_TOKENS,
   });
 

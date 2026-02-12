@@ -1,16 +1,16 @@
 /**
- * Hybrid retriever — combines Vectorize vector search with PostgreSQL BM25 via RRF.
+ * Hybrid retriever — combines vector search with PostgreSQL BM25 via RRF.
  *
- * Architecture:
- *   1. Vectorize: embed query → cosine similarity → top-K chunks → dedup by doc → SearchResult[]
+ * Architecture (when pgvector embeddings are available):
+ *   1. pgvector: embed query → cosine similarity → top-K chunks → dedup by doc → SearchResult[]
  *   2. PostgreSQL: BM25 full-text search on documents table → top-K docs by ts_rank
  *   3. RRF fusion: merge rankings using Reciprocal Rank Fusion (k=60)
  *   4. Return merged, deduplicated SearchResult[]
  *
- * This retriever wraps an existing Vectorize SearchFn and adds BM25 results.
- * If DATABASE_URL is not set, it falls back to Vectorize-only search.
+ * Fallback (no pgvector embeddings): uses Vectorize for vector search instead.
  */
 
+import OpenAI from "openai";
 import { Pool } from "pg";
 import type { SearchResult } from "./types";
 import type { SearchFn } from "./llm-client";
@@ -18,8 +18,16 @@ import type { SearchFn } from "./llm-client";
 // ── Config ──────────────────────────────────────────────
 
 const BM25_TOP_K = 100;           // max docs to retrieve from BM25
+const PGVECTOR_TOP_K = 100;       // max chunks to retrieve from pgvector
 const RRF_K = 60;                 // RRF constant (standard value)
 const MAX_DOCUMENTS = 30;         // max merged results to return
+
+// Score-based filtering (matches retriever.ts)
+const MIN_SCORE_THRESHOLD = 0.42; // absolute floor for cosine similarity
+const SCORE_DROP_FACTOR = 0.75;   // adaptive: drop docs scoring < 75% of best
+
+const PGVECTOR_EMBEDDING_MODEL = "text-embedding-3-large";
+const PGVECTOR_DIMS = 3072;
 
 // ── PostgreSQL connection pool ──────────────────────────
 
@@ -104,6 +112,155 @@ async function bm25Search(
   }
 }
 
+// ── pgvector search ─────────────────────────────────────
+
+/** Check if chunks table has embeddings (cached, checked once per process) */
+let _hasPgvectorEmbeddings: boolean | null = null;
+
+async function hasPgvectorEmbeddings(): Promise<boolean> {
+  if (_hasPgvectorEmbeddings !== null) return _hasPgvectorEmbeddings;
+  const pool = getPool();
+  if (!pool) {
+    _hasPgvectorEmbeddings = false;
+    return false;
+  }
+  try {
+    const result = await pool.query(
+      "SELECT EXISTS (SELECT 1 FROM chunks LIMIT 1) AS has_data",
+    );
+    _hasPgvectorEmbeddings = result.rows[0]?.has_data === true;
+  } catch {
+    _hasPgvectorEmbeddings = false;
+  }
+  return _hasPgvectorEmbeddings;
+}
+
+interface PgvectorChunkResult {
+  doc_id: string;
+  court: string;
+  court_level: string;
+  year: number;
+  title: string;
+  score: number;
+}
+
+/**
+ * Search via pgvector: embed query with text-embedding-3-large, then cosine similarity
+ * on chunks table. Groups by doc_id (best chunk score per doc), applies score filtering.
+ */
+async function pgvectorSearch(
+  query: string,
+  courtLevel?: string,
+  yearFrom?: number,
+  yearTo?: number,
+): Promise<SearchResult[]> {
+  const pool = getPool();
+  if (!pool) return [];
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return [];
+
+  // 1. Embed query
+  const openai = new OpenAI({ apiKey });
+  const embResponse = await openai.embeddings.create({
+    model: PGVECTOR_EMBEDDING_MODEL,
+    input: query,
+    dimensions: PGVECTOR_DIMS,
+  });
+  const queryVector = embResponse.data[0].embedding;
+  const vectorStr = `[${queryVector.join(",")}]`;
+
+  // 2. Query pgvector with optional metadata filters
+  let sql = `
+    SELECT doc_id, court, court_level, year, title,
+           1 - (embedding <=> $1::vector) AS score
+    FROM chunks
+    WHERE 1=1
+  `;
+  const params: (string | number)[] = [vectorStr];
+  let paramIdx = 2;
+
+  if (courtLevel && ["supreme", "appeal", "foreign"].includes(courtLevel)) {
+    sql += ` AND court_level = $${paramIdx}`;
+    params.push(courtLevel);
+    paramIdx++;
+  }
+  if (yearFrom) {
+    sql += ` AND year >= $${paramIdx}`;
+    params.push(yearFrom);
+    paramIdx++;
+  }
+  if (yearTo) {
+    sql += ` AND year <= $${paramIdx}`;
+    params.push(yearTo);
+    paramIdx++;
+  }
+
+  sql += ` ORDER BY embedding <=> $1::vector LIMIT $${paramIdx}`;
+  params.push(PGVECTOR_TOP_K);
+
+  try {
+    const result = await pool.query(sql, params);
+    const chunks = result.rows as PgvectorChunkResult[];
+
+    // 3. Group by doc_id, keep best chunk score per document
+    const docMap = new Map<string, PgvectorChunkResult>();
+    for (const chunk of chunks) {
+      const existing = docMap.get(chunk.doc_id);
+      if (!existing || chunk.score > existing.score) {
+        docMap.set(chunk.doc_id, chunk);
+      }
+    }
+
+    // 4. Sort by score descending
+    const sorted = Array.from(docMap.values()).sort((a, b) => b.score - a.score);
+
+    // 5. Score filtering (same logic as retriever.ts)
+    const bestScore = sorted[0]?.score ?? 0;
+    const adaptiveThreshold = bestScore * SCORE_DROP_FACTOR;
+    const effectiveThreshold = Math.max(MIN_SCORE_THRESHOLD, adaptiveThreshold);
+    const filtered = sorted.filter((d) => d.score >= effectiveThreshold);
+
+    // 6. Cap at MAX_DOCUMENTS
+    const topDocs = filtered.slice(0, MAX_DOCUMENTS);
+
+    console.log(JSON.stringify({
+      event: "pgvector_search",
+      query: query.slice(0, 200),
+      courtLevel: courtLevel || null,
+      yearFrom,
+      yearTo,
+      chunksMatched: chunks.length,
+      uniqueDocs: sorted.length,
+      afterScoreFilter: filtered.length,
+      returned: topDocs.length,
+      topScore: bestScore,
+      scoreThreshold: parseFloat(effectiveThreshold.toFixed(4)),
+    }));
+
+    return topDocs.map((d) => ({
+      doc_id: d.doc_id,
+      title: d.title,
+      court: d.court,
+      year: String(d.year),
+      score: d.score,
+      text: "[Metadata only — use summarize_documents to analyze full text]",
+    }));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(JSON.stringify({ event: "pgvector_search_error", error: msg }));
+    return [];
+  }
+}
+
+/**
+ * Create a search function using pgvector (text-embedding-3-large 3072d).
+ * This replaces Vectorize for vector search when embeddings exist in PostgreSQL.
+ */
+export function createPgvectorSearchFn(): SearchFn {
+  return pgvectorSearch;
+}
+
 // ── RRF Fusion ──────────────────────────────────────────
 
 interface FusedDoc {
@@ -172,8 +329,13 @@ function rrfFusion(
 // ── Hybrid search function ──────────────────────────────
 
 /**
- * Create a hybrid search function that combines Vectorize + BM25.
- * Falls back to Vectorize-only if DATABASE_URL is not set.
+ * Create a hybrid search function that combines vector search + BM25.
+ *
+ * Vector search priority:
+ *   1. pgvector (text-embedding-3-large 3072d) — if chunks table has data
+ *   2. Vectorize (text-embedding-3-small 1536d) — fallback
+ *
+ * Falls back to vector-only if DATABASE_URL is not set.
  */
 export function createHybridSearchFn(vectorizeSearchFn: SearchFn): SearchFn {
   return async (
@@ -182,9 +344,13 @@ export function createHybridSearchFn(vectorizeSearchFn: SearchFn): SearchFn {
     yearFrom?: number,
     yearTo?: number,
   ): Promise<SearchResult[]> => {
+    // Choose vector search backend: pgvector if available, else Vectorize
+    const usePgvector = await hasPgvectorEmbeddings();
+    const vectorSearchFn = usePgvector ? pgvectorSearch : vectorizeSearchFn;
+
     // Run vector search and BM25 in parallel
     const [vectorResults, bm25Results] = await Promise.all([
-      vectorizeSearchFn(query, courtLevel, yearFrom, yearTo),
+      vectorSearchFn(query, courtLevel, yearFrom, yearTo),
       bm25Search(query, yearFrom, yearTo),
     ]);
 
