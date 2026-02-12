@@ -485,3 +485,37 @@ Three distinct failure modes:
 
 - **Hit rate**: 33% — consistent with Runs 5/6
 - **BM25 improvement**: stop word filtering reduces index noise, slightly better rankings. No morphological stemming (el_GR limitation).
+
+### Run 8: 2026-02-12 (Adaptive multi-query 3-8 + raw user query search)
+- **Fixes applied**:
+  1. Raw user query always searched first (query #0) — both vector and BM25 with phrase matching
+  2. System prompt updated: 3-8 queries (was 3-5) with 5 new facets (procedural, landmark, party-type, court, alternative framework)
+  3. BM25 now includes `phraseto_tsquery` for exact phrase matches alongside OR-logic
+  4. RERANK_MAX_DOCS_IN increased from 90 to 180 for more queries
+- **Searches**: 6 (1 raw query + 5 LLM-generated facet queries)
+- **Sources found**: 121 (up from 69-74 with 3 queries)
+- **After reranker (Cohere + GPT hybrid)**: 30 kept
+
+  | ID | In Sources | Rerank (hybrid) | Kept? | Summarized | Relevance | Notes |
+  |----|-----------|-----------------|-------|------------|-----------|-------|
+  | A1 | ✅ | 5 | ✅ | ✅ | **HIGH** | Stable — found by raw query + facet queries |
+  | A2 | ✅ | 5 | ✅ | ✅ | **HIGH** | Upgraded from MEDIUM → HIGH |
+  | A3 | ✅ | 3.5 | ✅ | ✅ | **HIGH** | Stable |
+  | A4 | ❌ | — | — | ❌ | — | Still not in vector search (needs pgvector 3072d) |
+  | B1 | ❌ | — | — | ❌ | — | Not found this run |
+  | B2 | ❌ | — | — | ❌ | — | Not found this run |
+  | B3 | ❌ | — | — | ❌ | — | Not found this run |
+  | B4 | ❌ | — | — | ❌ | — | — |
+  | B5 | ❌ | — | — | ❌ | — | — |
+  | B6 | ❌ | — | — | ❌ | — | — |
+  | C1 | ✅ | 3.1 | ❌ | ❌ | — | Found but cut by 30-doc cap |
+  | C2 | ❌ | — | — | ❌ | — | — |
+  | C3 | ✅ | 3.4 | ❌ | ❌ | — | Found but cut by cap |
+
+- **Hit rate**: 20/30 = **67%** — DOUBLED from Run 7 (33%)! ⬆️⬆️
+- **Key improvements**:
+  - **All 3 A-docs found and rated HIGH** (A1, A2, A3 all HIGH — best A-doc performance)
+  - **9 HIGH + 11 MEDIUM = 20/30 relevant docs** — zero NONE ratings (was 6-8 NONE previously)
+  - **More sources found** (121 vs 69-74) due to 6 diverse searches covering more facets
+  - **Raw query search** ensures the user's exact phrasing is always included
+- **Remaining**: A4/B-docs need pgvector 3072d embeddings (currently in Vectorize 1536d only)
