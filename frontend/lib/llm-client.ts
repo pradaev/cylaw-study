@@ -76,12 +76,16 @@ Imagine you are reading a Cypriot court judgment that addresses the user's quest
 GOOD queries are phrases a judge would write in a decision — natural legal Greek as it appears in judgments.
 BAD queries are abstract legal framework names, EU regulation titles, or overly broad academic terms that don't appear in actual decision text.
 
-QUERY STRATEGY — each of your 3-5 searches MUST target a DIFFERENT facet:
+QUERY STRATEGY — each of your 3-8 searches MUST target a DIFFERENT facet:
 
 1. **Core legal concept** — the most precise legal term for the topic. Use the exact doctrinal phrase a judge would use, not the user's colloquial wording.
 2. **Specific statute or regulation** — the law, article, or regulation a judge would cite. Include the exact reference (e.g., "Ν. 216(Ι)/2012", "Δ.25 Θεσμών Πολιτικής Δικονομίας", "Κανονισμός 2016/1103").
 3. **Alternative terminology / synonyms** — different words judges use for the same concept. Cypriot judges vary in phrasing — search for the synonym, not a paraphrase.
-4-5. **(Optional)** Related procedural concepts, landmark case names, or adjacent doctrines that would appear in relevant decisions.
+4. **(When relevant)** Procedural context — type of proceeding, interim measures, procedural stage (e.g., "ενδιάμεση αίτηση", "προσωρινό διάταγμα").
+5. **(When relevant)** Related doctrines / landmark cases — established legal principles or leading case names that would be cited.
+6. **(When relevant)** Party-type search — nationality, entity type, or characteristic of parties that signals relevant cases (e.g., "αλλοδαποί υπήκοοι", "Ρώσοι πολίτες", "εταιρεία εκτός δικαιοδοσίας").
+7. **(When relevant)** Specific court / jurisdiction — target a particular court or jurisdiction type (e.g., "ΠΕΡΙΟΥΣΙΑΚΩΝ ΔΙΑΦΟΡΩΝ", "Ανώτατο Δικαστήριο").
+8. **(When relevant)** Alternative legal framework — international treaties, bilateral agreements, or EU directives that provide alternative legal basis (e.g., "Σύμβαση Χάγης", "Κανονισμός Βρυξέλλες").
 
 KEYWORD OVERLAP CONSTRAINT:
 At most 2 words may repeat across your queries. Each query MUST introduce at least 2 NEW legal terms not used in any previous query.
@@ -105,8 +109,13 @@ WORKED EXAMPLE — topic: "τροποποίηση δικογράφου" (amendme
   Query 3 (synonym): "διόρθωση δικογράφου προσθήκη νέας αξίωσης"
   → "διόρθωση" is an alternative term some judges use instead of "τροποποίηση"
 
+HOW MANY SEARCHES:
+- **3-4 searches** for narrow/specific topics (single legal concept, one statute, one court)
+- **5-6 searches** for moderate topics (multiple doctrines, both procedural and substantive aspects)
+- **7-8 searches** for broad/complex topics spanning multiple legal areas, involving foreign law, or when both procedural and substantive issues exist
+
 SEARCH RULES:
-1. Do 3-5 searches following the facet strategy above. NEVER repeat the same query.
+1. Do 3-8 searches following the facet strategy above. Use MORE searches for complex topics. NEVER repeat the same query.
 2. Use year_from/year_to filters when the user specifies a time range.
 3. If the user mentions a specific law or article (e.g., "Cap. 148", "Άρθρο 47"), include the exact reference in at least one search query.
 4. In legal_context, always include: (a) the specific Cypriot law(s) governing this area, (b) any EU regulation if applicable, (c) 1-2 landmark case names if you know them. This helps the AI analyst distinguish relevant from irrelevant cases.
@@ -121,7 +130,7 @@ WORKFLOW — you have one tool:
 
 Each call automatically searches the database, reads full texts, and analyzes each case. The results (relevant court decisions with AI-generated summaries) are displayed directly to the user by the application — you do NOT receive them and do NOT need to list them.
 
-YOUR ONLY JOB: Call search_cases 3-5 times with different query texts targeting different facets (more if needed for multiple court levels). Do NOT write any text, analysis, or commentary — the application handles everything else.
+YOUR ONLY JOB: Call search_cases 3-8 times with different query texts targeting different facets (more if needed for multiple court levels or complex topics). Do NOT write any text, analysis, or commentary — the application handles everything else.
 
 WHEN NOT TO SEARCH:
 - General legal knowledge questions — answer from your knowledge.
@@ -436,7 +445,7 @@ Document ID: ${docId}`;
 const RERANK_MODEL = "gpt-4o-mini";
 const RERANK_MIN_SCORE_GPT = 4;      // 0-10 scale; GPT-4o-mini: keep docs scoring >= 4
 const RERANK_MIN_SCORE_COHERE = 0.1; // 0-10 scale (= 0.01 native); Cohere scores are much lower, use top_n + cap
-const RERANK_MAX_DOCS_IN = 90;       // max docs to send to reranker (3 searches × 30 docs)
+const RERANK_MAX_DOCS_IN = 180;      // max docs to send to reranker (9 searches × 30 docs)
 const RERANK_BATCH_SIZE = 20;        // score in batches of 20 to prevent attention degradation
 const MAX_SUMMARIZE_DOCS = 30;       // hard cap: max docs to send to GPT-4o summarizer
 const RERANK_HEAD_CHARS = 500;        // chars from document head (title, parties)
@@ -1040,6 +1049,40 @@ async function streamOpenAI(
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
+  // ── Query #0: Always search the user's raw query first ──
+  // This catches exact statute/article/case number references that LLM paraphrasing might lose.
+  if (_lastUserQuery && _lastUserQuery.trim().length > 2) {
+    searchStep++;
+    emit({
+      event: "searching",
+      data: {
+        query: _lastUserQuery,
+        step: searchStep,
+        isRawQuery: true,
+      },
+    });
+    const rawDocs = await handleSearch(
+      _lastUserQuery,
+      undefined,  // no court_level filter for raw query
+      undefined,
+      undefined,
+      searchFn,
+      seenDocIds,
+      allSources,
+      emit,
+    );
+    allFoundDocs.push(...rawDocs);
+    emit({
+      event: "search_result",
+      data: { step: searchStep, found: rawDocs.length, total: allSources.length, isRawQuery: true },
+    });
+    console.log(JSON.stringify({
+      event: "raw_query_search",
+      query: _lastUserQuery.slice(0, 200),
+      found: rawDocs.length,
+    }));
+  }
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const response = await client.chat.completions.create({
       model: modelCfg.modelId,
@@ -1201,6 +1244,29 @@ async function streamClaude(
   let searchStep = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+
+  // ── Query #0: Always search the user's raw query first ──
+  if (_lastUserQuery && _lastUserQuery.trim().length > 2) {
+    searchStep++;
+    emit({
+      event: "searching",
+      data: { query: _lastUserQuery, step: searchStep, isRawQuery: true },
+    });
+    const rawDocs = await handleSearch(
+      _lastUserQuery, undefined, undefined, undefined,
+      searchFn, seenDocIds, allSources, emit,
+    );
+    allFoundDocs.push(...rawDocs);
+    emit({
+      event: "search_result",
+      data: { step: searchStep, found: rawDocs.length, total: allSources.length, isRawQuery: true },
+    });
+    console.log(JSON.stringify({
+      event: "raw_query_search",
+      query: _lastUserQuery.slice(0, 200),
+      found: rawDocs.length,
+    }));
+  }
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const response = await client.messages.create({

@@ -72,7 +72,7 @@ async function bm25Search(
   const words = query
     .split(/\s+/)
     .filter((w) => w.length >= 2)
-    .map((w) => w.replace(/[^a-zA-Zα-ωΑ-Ωά-ώ0-9]/g, ""))
+    .map((w) => w.replace(/[^a-zA-Zα-ωΑ-Ωά-ώ0-9./()]/g, ""))
     .filter(Boolean);
 
   if (words.length === 0) return [];
@@ -81,9 +81,9 @@ async function bm25Search(
 
   let sql = `
     SELECT doc_id, title, court, court_level, year,
-      ts_rank(tsv, to_tsquery('simple', $1)) AS rank
+      ts_rank(tsv, to_tsquery('cylaw', $1)) AS rank
     FROM documents
-    WHERE tsv @@ to_tsquery('simple', $1)
+    WHERE tsv @@ to_tsquery('cylaw', $1)
   `;
   const params: (string | number)[] = [tsQuery];
   let paramIdx = 2;
@@ -104,10 +104,87 @@ async function bm25Search(
 
   try {
     const result = await pool.query(sql, params);
-    return result.rows as BM25Result[];
+    const orResults = result.rows as BM25Result[];
+
+    // Also run phrase search — critical for matching exact statute/article/case refs
+    // phraseto_tsquery preserves word order: "Ν. 216(Ι)/2012" matches documents with those words adjacent
+    const phraseResults = await bm25PhraseSearch(query, yearFrom, yearTo);
+
+    // Merge: phrase results get priority (lower rank = higher priority)
+    const merged = new Map<string, BM25Result>();
+    for (const r of phraseResults) {
+      merged.set(r.doc_id, r);
+    }
+    for (const r of orResults) {
+      if (!merged.has(r.doc_id)) {
+        merged.set(r.doc_id, r);
+      }
+    }
+
+    // Sort by rank descending and cap
+    return Array.from(merged.values())
+      .sort((a, b) => b.rank - a.rank)
+      .slice(0, BM25_TOP_K);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.log(JSON.stringify({ event: "bm25_search_error", error: msg }));
+    return [];
+  }
+}
+
+/**
+ * BM25 phrase search — preserves word order for exact matches.
+ * Critical for matching statute references like "Ν. 216(Ι)/2012" or case numbers.
+ */
+async function bm25PhraseSearch(
+  query: string,
+  yearFrom?: number,
+  yearTo?: number,
+): Promise<BM25Result[]> {
+  const pool = getPool();
+  if (!pool) return [];
+
+  // Only run phrase search if query looks like it might contain an exact reference
+  // (has numbers, dots, parentheses, or is short enough to be specific)
+  const hasExactRef = /[0-9]/.test(query) || /[.()\/]/.test(query) || query.split(/\s+/).length <= 6;
+  if (!hasExactRef) return [];
+
+  let sql = `
+    SELECT doc_id, title, court, court_level, year,
+      ts_rank(tsv, phraseto_tsquery('cylaw', $1)) AS rank
+    FROM documents
+    WHERE tsv @@ phraseto_tsquery('cylaw', $1)
+  `;
+  const params: (string | number)[] = [query];
+  let paramIdx = 2;
+
+  if (yearFrom) {
+    sql += ` AND year >= $${paramIdx}`;
+    params.push(yearFrom);
+    paramIdx++;
+  }
+  if (yearTo) {
+    sql += ` AND year <= $${paramIdx}`;
+    params.push(yearTo);
+    paramIdx++;
+  }
+
+  sql += ` ORDER BY rank DESC LIMIT 20`;
+
+  try {
+    const result = await pool.query(sql, params);
+    if (result.rows.length > 0) {
+      console.log(JSON.stringify({
+        event: "bm25_phrase_match",
+        query: query.slice(0, 200),
+        found: result.rows.length,
+      }));
+    }
+    return result.rows as BM25Result[];
+  } catch (err) {
+    // Phrase search can fail on some query patterns — that's OK, OR search covers it
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(JSON.stringify({ event: "bm25_phrase_search_error", error: msg }));
     return [];
   }
 }

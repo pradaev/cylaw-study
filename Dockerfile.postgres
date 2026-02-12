@@ -1,0 +1,11 @@
+FROM pgvector/pgvector:pg17
+
+# Install Greek hunspell dictionary for BM25 stemming
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends hunspell-el && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy Cypriot legal custom dictionary + Greek stop words
+COPY scripts/cylaw_custom.dict /usr/share/postgresql/17/tsearch_data/cylaw_custom.dict
+COPY scripts/cylaw_custom.affix /usr/share/postgresql/17/tsearch_data/cylaw_custom.affix
+COPY scripts/greek.stop /usr/share/postgresql/17/tsearch_data/greek.stop

@@ -465,3 +465,23 @@ Three distinct failure modes:
 - **Hit rate**: ~30% (within variance of Run 5's 33%)
 - **Key observation**: Temperature change from 0.1→0 has minimal impact on ratings (expected — 0.1 was already near-deterministic). Main benefit: truly deterministic summarizer outputs across runs.
 - **LLM query variance** explains B1/B2 not appearing — different queries generated this run found different docs. Multi-query expansion (Item 8) should stabilize this.
+
+### Run 7: 2026-02-12 (Greek stemming for BM25)
+- **Fixes applied**:
+  1. Custom Dockerfile with `hunspell-el` for Greek word recognition + stop words
+  2. `cylaw` text search config: `greek_hunspell → cylaw_custom → simple`
+  3. Greek stop words (ο, η, το, και, etc.) now filtered from BM25 tsvector
+  4. Rebuilt documents.tsv column with `cylaw` config
+  5. Updated `pg-retriever.ts` to use `to_tsquery('cylaw', ...)` instead of `simple`
+- **Note**: el_GR hunspell dictionary doesn't actually stem (flat word list, no affix flags). Main benefit: Greek stop word removal from index and custom legal term recognition.
+
+  | ID | In Sources | Rerank | Kept? | Rel | Notes |
+  |----|-----------|--------|-------|-----|-------|
+  | A1 | ✅ | 2 | ✅ | **HIGH** | Stable |
+  | A2 | ❌ | — | — | — | LLM query variance |
+  | A3 | ✅ | 3.5 | ✅ | **HIGH** | Stable |
+  | A4 | ❌ | — | — | — | Not in vector search |
+  | C1 | ✅ | 3.1 | ✅ | OTHER | — |
+
+- **Hit rate**: 33% — consistent with Runs 5/6
+- **BM25 improvement**: stop word filtering reduces index noise, slightly better rankings. No morphological stemming (el_GR limitation).

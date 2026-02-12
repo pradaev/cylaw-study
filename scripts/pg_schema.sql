@@ -1,7 +1,31 @@
 -- Schema for hybrid search (BM25 + optional vector)
--- PostgreSQL 17 + pgvector
+-- PostgreSQL 17 + pgvector + Greek stemming
 
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS unaccent;
+
+-- Greek text search: hunspell (word recognition + stop words) → custom legal dict → simple fallback
+-- Requires: hunspell-el installed, cylaw_custom.dict/affix in tsearch_data/
+CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS greek_hunspell (
+  TEMPLATE = ispell,
+  DictFile = el_gr, AffFile = el_gr, StopWords = greek
+);
+CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS cylaw_custom (
+  TEMPLATE = ispell,
+  DictFile = cylaw_custom, AffFile = cylaw_custom
+);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_ts_config WHERE cfgname = 'cylaw') THEN
+    CREATE TEXT SEARCH CONFIGURATION cylaw (COPY = simple);
+    ALTER TEXT SEARCH CONFIGURATION cylaw
+      ALTER MAPPING FOR asciiword, asciihword, hword_asciipart
+      WITH cylaw_custom, simple;
+    ALTER TEXT SEARCH CONFIGURATION cylaw
+      ALTER MAPPING FOR word, hword, hword_part
+      WITH greek_hunspell, cylaw_custom, simple;
+  END IF;
+END $$;
 
 -- Full documents for BM25 search
 CREATE TABLE IF NOT EXISTS documents (
@@ -12,7 +36,7 @@ CREATE TABLE IF NOT EXISTS documents (
   year       INT NOT NULL DEFAULT 0,
   title      TEXT NOT NULL DEFAULT '',   -- first line of document
   content    TEXT NOT NULL,              -- full document text
-  tsv        tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED
+  tsv        tsvector GENERATED ALWAYS AS (to_tsvector('cylaw', content)) STORED
 );
 
 -- Indexes
