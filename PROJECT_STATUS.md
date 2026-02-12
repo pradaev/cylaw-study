@@ -6,9 +6,10 @@
 
 ## What Works Now
 
-- **Three-phase pipeline** — Phase 1: search (LLM + Vectorize), Phase 1.5: rerank (GPT-4o-mini), Phase 2: summarize (Service Binding)
+- **Three-phase pipeline** — Phase 1: search (LLM + Vectorize), Phase 1.5: rerank (Cohere or GPT-4o-mini), Phase 2: summarize (Service Binding)
+- **Cohere rerank** — `rerank-v3.5` cross-encoder (if `COHERE_API_KEY` set), falls back to GPT-4o-mini batches
 - **Service Binding summarizer** — `cylaw-summarizer` Worker, solves 6-connection limit
-- **Reranker pre-filter** — GPT-4o-mini scores docs by preview in batches of 20, keeps ≥4 for full summarization (~$0.005)
+- **Summarizer research-value prompt** — decoupled engagement from relevance, MANDATORY OVERRIDES for foreign-law cases
 - **Score threshold** — retriever drops docs below 0.42 cosine and below 75% of best match
 - **Progressive UI** — progress bar during summarization, cards appear after completion
 - **court_level filter** — LLM filters by `supreme`, `appeal`, or `foreign`
@@ -30,9 +31,9 @@
 ## Current Problems
 
 - **OpenAI 800K TPM** — parallel batches can hit rate limit, some docs fail. User can retry.
-- **Hit rate ~10%** — Improved from 2% → 4% → 14% → 20% → 10% (after fixing false positives). A1/A2/A3 found, B-docs rated NONE by summarizer.
-- **Embedding quality** — `text-embedding-3-small` finds similar words, not relevant cases. Hybrid search (BM25 + vector) is next step.
-- **Summarizer too strict on B-docs** — Cases with foreign elements but no explicit "foreign law" discussion rated NONE. Needs decoupled relevance criteria.
+- **Hit rate ~15%** — A1 HIGH, A2 MEDIUM, A3 HIGH. B2 HIGH with Cohere. B4/B6 need Cohere testing.
+- **Embedding quality** — `text-embedding-3-small` finds similar words, not relevant cases. A4/B5 still not found by vector search.
+- **Reranker batch noise (GPT-4o-mini)** — same doc scored 1 or 5 depending on batch. Cohere rerank added but needs API key to test.
 
 ## What's Next
 
@@ -40,8 +41,8 @@ See `docs/plan/search_quality_overhaul_v2.plan.md` for detailed plan.
 
 ### High Priority
 1. ~~**Phase 0: Weaviate cleanup**~~ — DONE: removed all Weaviate code, hardcoded Vectorize.
-2. **Phase 1: Fix summarizer prompt** — decouple engagement from relevance, add research-value criteria. Target: B-docs MEDIUM, hit rate ≥35%.
-3. **Phase 2a: Cohere rerank** — replace GPT-4o-mini reranker with `rerank-multilingual-v3.0` (cross-encoder, supports Greek). Target: better calibration, no batch noise.
+2. ~~**Phase 1: Fix summarizer prompt**~~ — DONE: decoupled engagement from relevance, MANDATORY OVERRIDES. True positive A+B docs: 1 → 4.
+3. ~~**Phase 2a: Cohere rerank**~~ — DONE: `rerank-v3.5` via HTTP, GPT-4o-mini fallback. Needs `COHERE_API_KEY` for live testing.
 4. **Phase 2b: PostgreSQL + pgvector + hybrid search** — text-embedding-3-large (3072d), BM25 + vector via RRF. Target: find A4/B5, hit rate ≥50%.
 
 ### Medium Priority
@@ -58,8 +59,8 @@ See `docs/plan/search_quality_overhaul_v2.plan.md` for detailed plan.
 
 ### Architecture
 - **Service Binding** — each batch of 5 docs = separate call = fresh connection pool
-- **Three-phase pipeline** — LLM searches → GPT-4o-mini reranks → GPT-4o summarizes. Source cards ARE the answer.
-- **Reranker** — reads head+Subject+ΝΟΜΙΚΗ ΠΤΥΧΗ (or ΚΕΙΜΕΝΟ) preview+tail per doc, scores in batches of 20, keeps >= 4. Cost ~$0.005.
+- **Three-phase pipeline** — LLM searches → Cohere/GPT-4o-mini reranks → GPT-4o summarizes. Source cards ARE the answer.
+- **Reranker** — Cohere: single HTTP call, 0-1 scores × 10. GPT-4o-mini: batches of 20, 0-10 scale. Both: keep >= 4, cap at 30.
 - **Summarizer prompt in English** — output in Greek, instructions in English (fewer hallucinations)
 
 ### Technical
@@ -89,11 +90,17 @@ See `docs/plan/search_quality_overhaul_v2.plan.md` for detailed plan.
 | `npm run test:fast` | typecheck + lint (free, 3s) | After every change |
 | `npm run test:integration` | API tests (~$0.25) | Search/summarizer changes |
 | `npm run test:e2e` | Full pipeline E2E (~$5-10) | Architecture changes |
-| `node scripts/compare_indexes.mjs` | Compare old vs new index | After re-embedding |
 | `node scripts/deep_dive_query.mjs` | Full pipeline diagnostic for one query | Debug search quality |
 | `node scripts/pipeline_stage_test.mjs` | Stage-by-stage ground-truth check | Search quality experiments |
 
 ## Last Session Log
+
+### 2026-02-12 (session 17 — Phase 0+1+2a: summarizer + Cohere rerank)
+- **Phase 0** committed: Weaviate removal + MAX_SUMMARIZE_DOCS 20→30
+- **Phase 1** committed: Summarizer prompt decoupled engagement from relevance. MANDATORY OVERRIDES: foreign-law + cross-border = MEDIUM. True A+B positives: 1 → 4. C-doc false positives eliminated.
+- **Phase 2a** committed: Cohere rerank-v3.5 via HTTP fetch (no npm dep), GPT-4o-mini fallback. Needs `COHERE_API_KEY` in `.env.local` to activate.
+- Test results (GPT-4o-mini fallback): A1 HIGH, A2 MEDIUM, A3 HIGH, B2 HIGH. B4/B6 "?" (likely LOW). C1/C3 LOW.
+- All 3 phases committed + pushed to origin/main.
 
 ### 2026-02-12 (session 16 — Weaviate cleanup + MAX_SUMMARIZE_DOCS fix)
 - **Weaviate removed** — deleted 8 files, cleaned route.ts/env/docs. Hardcoded Vectorize.
