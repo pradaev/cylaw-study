@@ -633,4 +633,36 @@ Three distinct failure modes:
 | B6 | NONE | NONE | LOW | LOW | ❌(rr) | ❌ | ❌ | ❌ | ❌(src) | ❌(src) |
 | C1 | NONE | NONE | LOW | LOW | OTHER | OTHER | OTHER | ❌(cap) | ❌(cap) | ❌(cap) |
 
-Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut by 30-doc cap, ❌(src)=in sources but not kept, ❌=not found
+Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut by cap, ❌(src)=in sources but not kept, ❌=not found
+
+### Run 11: 2026-02-13 (Smart cutoff: min 30, extend to 50 for score >= 2.0)
+- **Fixes applied**:
+  1. Replaced hard `MAX_SUMMARIZE_DOCS = 30` with adaptive cutoff
+  2. Keep minimum 30 docs, extend up to 50 if docs at position 31+ score >= 2.0 (effective score incl. BM25 boost)
+  3. Absolute max 50 to prevent cost explosion
+- **Searches**: 5 (1 raw query + 4 LLM-generated)
+- **Sources found**: 98
+- **After reranker**: 50 kept (smart cutoff extended from 30 to max 50)
+- **After summarizer**: 4 HIGH, 13 MEDIUM, 12 NONE
+
+  | ID | In Sources | Rerank (hybrid) | Kept? | Summarized | Relevance | Notes |
+  |----|-----------|-----------------|-------|------------|-----------|-------|
+  | A1 | ✅ | 5 | ✅ | ✅ | **HIGH** | Stable |
+  | A2 | ✅ | 5 | ❌ | ❌ | — | Still cut — BM25-boosted docs outrank it |
+  | A3 | ✅ | 3.5 | ❌ | ❌ | — | Still cut by cap (position 51+) |
+  | A4 | ❌ | — | — | ❌ | — | Not found |
+  | B1 | ✅ | 1 | ❌ | ❌ | — | Low rerank score (below 2.0 cutoff) |
+  | B2 | ❌ | — | — | ❌ | — | Not found (LLM query variance) |
+  | B3 | ✅ | 5 | ❌ | ❌ | — | Still cut despite score 5 — BM25-boosted docs crowd it out |
+  | B4 | ✅ | 2.2 | ❌ | ❌ | — | Just above threshold but position too low |
+  | B5 | ✅ | 6 | ✅ | ✅ | **MEDIUM** | **FIRST TIME EVER FOUND!** Never appeared in Runs 1-10 |
+  | B6 | ✅ | 1.7 | ❌ | ❌ | — | Below 2.0 cutoff |
+  | C1 | ✅ | 3.1 | ❌ | ❌ | — | Cut by cap |
+  | C2 | ❌ | — | — | ❌ | — | Not found |
+  | C3 | ✅ | 3.4 | ❌ | ❌ | — | Cut by cap |
+
+- **Hit rate**: (4+13)/50 = **34%** (down from 53% in Run 10 due to 50-doc denominator)
+- **Absolute relevant count**: 17 (4 HIGH + 13 MEDIUM) vs 16 in Run 10 — marginally more
+- **Key win**: **B5 found for the first time ever!** (rerank score 6, MEDIUM). This doc was missed by ALL previous search methods.
+- **Key issue**: BM25 boost (max 5.0) inflates effective scores of keyword-matched docs, pushing quality rerank-only docs (A2, A3, B3 with scores 3.5-5) below position 50
+- **10/13 GT in sources** (same as Run 9) — pgvector recall is stable

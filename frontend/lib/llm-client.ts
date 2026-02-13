@@ -447,7 +447,9 @@ const RERANK_MIN_SCORE_GPT = 4;      // 0-10 scale; GPT-4o-mini: keep docs scori
 const RERANK_MIN_SCORE_COHERE = 0.1; // 0-10 scale (= 0.01 native); Cohere scores are much lower, use top_n + cap
 const RERANK_MAX_DOCS_IN = 180;      // max docs to send to reranker (9 searches × 30 docs)
 const RERANK_BATCH_SIZE = 20;        // score in batches of 20 to prevent attention degradation
-const MAX_SUMMARIZE_DOCS = 30;       // hard cap: max docs to send to GPT-4o summarizer
+const SUMMARIZE_DOCS_MIN = 30;       // minimum docs to always keep (baseline)
+const SUMMARIZE_DOCS_MAX = 50;       // absolute max to prevent cost explosion
+const SMART_CUTOFF_SCORE = 2.0;      // extend beyond min for docs scoring >= this
 const RERANK_HEAD_CHARS = 500;        // chars from document head (title, parties)
 const RERANK_DECISION_CHARS = 2000;   // chars from start of decision text / ΝΟΜΙΚΗ ΠΤΥΧΗ
 const RERANK_TAIL_CHARS = 1500;       // chars from end (ruling/conclusion)
@@ -701,7 +703,7 @@ ${docList}`;
   //    even if Cohere scored them low — BM25 keyword match is a reliable signal.
   const BM25_FORCE_KEEP_RANK = 50; // force-keep docs in top 50 BM25 results
   // For hybrid (cohere+gpt), keep Cohere threshold — GPT rescoring lifts scores of
-  // rescued docs so they naturally sort higher. The MAX_SUMMARIZE_DOCS cap handles the rest.
+  // rescued docs so they naturally sort higher. The smart cutoff cap handles the rest.
   const minScore = (rerankBackend === "cohere" || rerankBackend === "cohere+gpt")
     ? RERANK_MIN_SCORE_COHERE
     : RERANK_MIN_SCORE_GPT;
@@ -739,10 +741,15 @@ ${docList}`;
   }
   scored.sort((a, b) => effectiveScore(b) - effectiveScore(a) || (b.doc.score ?? 0) - (a.doc.score ?? 0));
 
-  // Cap at MAX_SUMMARIZE_DOCS to prevent excessive summarization time
-  const cappedCount = Math.min(scored.length, MAX_SUMMARIZE_DOCS);
-  const kept = scored.slice(0, cappedCount).map((s) => s.doc);
-  const cappedDocs = scored.length - cappedCount;
+  // Smart cutoff: keep at least SUMMARIZE_DOCS_MIN, extend up to MAX for high-scoring docs
+  // This prevents losing relevant docs (B3 score=6, A3 score=3.5) that fall outside top 30
+  let cutoffIdx = Math.min(scored.length, SUMMARIZE_DOCS_MIN);
+  while (cutoffIdx < Math.min(scored.length, SUMMARIZE_DOCS_MAX)) {
+    if (effectiveScore(scored[cutoffIdx]) < SMART_CUTOFF_SCORE) break;
+    cutoffIdx++;
+  }
+  const kept = scored.slice(0, cutoffIdx).map((s) => s.doc);
+  const cappedDocs = scored.length - cutoffIdx;
 
   // Build score details for logging and SSE — 'kept' reflects actual cap, not just score threshold
   const keptDocIds = new Set(kept.map((d) => d.doc_id));
@@ -760,7 +767,8 @@ ${docList}`;
     inputDocs: previews.length,
     batches: rerankBackend === "cohere" ? 1 : Math.ceil(previews.length / RERANK_BATCH_SIZE),
     keptByScore: scored.length,
-    cappedTo: cappedCount,
+    cappedTo: cutoffIdx,
+    smartCutoffExtended: cutoffIdx > SUMMARIZE_DOCS_MIN,
     dropped: dropped.length,
     minScore: minScore,
     inputTokens: totalInputTokens,
@@ -771,7 +779,9 @@ ${docList}`;
     console.log(JSON.stringify({
       event: "rerank_capped",
       droppedByCap: cappedDocs,
-      maxSummarizeDocs: MAX_SUMMARIZE_DOCS,
+      summarizeDocsMin: SUMMARIZE_DOCS_MIN,
+      summarizeDocsMax: SUMMARIZE_DOCS_MAX,
+      smartCutoffScore: SMART_CUTOFF_SCORE,
     }));
   }
 
