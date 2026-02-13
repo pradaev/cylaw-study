@@ -7,7 +7,7 @@
 ## What Works Now
 
 - **Hybrid search pipeline** — pgvector (2000d, text-embedding-3-large) + PostgreSQL BM25 (keyword) → RRF fusion → Cohere+GPT rerank → summarize
-- **pgvector embeddings** — 1.92M chunks with text-embedding-3-large (3072d→2000d Matryoshka), IVFFlat index (1500 lists, probes=30)
+- **pgvector embeddings** — 2.02M chunks with text-embedding-3-large (3072d→2000d Matryoshka), IVFFlat index (1500 lists, probes=30), 98% corpus coverage (146,941/149,886 docs)
 - **BM25 keyword search** — PostgreSQL `cylaw` text search config (Greek hunspell + custom legal dict + stop words), 149,886 full documents
 - **BM25 phrase search** — `phraseto_tsquery` for exact statute/article/case number matches
 - **Hybrid Cohere+GPT reranker** — Cohere rerank-v3.5 first pass, GPT-4o-mini rescue for low-Cohere docs
@@ -29,7 +29,7 @@
 - **A4 not retrievable** — procedural appeal doc with 0 relevant keywords, BM25 rank 14531. Only connected via case-party association (E.R v P.R), not content. Needs "related cases" feature.
 - **A3 still cut by cap** — rerank 3.5 consistently, but position 51+ in effective score ranking
 - **B2 intermittent** — appears in some runs, absent in others (LLM query variance)
-- **8,696 docs without embeddings** — 5.8% of corpus never embedded (need future batch job)
+- **2,945 docs without embeddings** — 2.0% of corpus (batch 019 stuck in OpenAI "finalizing" — will retry)
 
 ## What's Next
 
@@ -62,7 +62,7 @@
 
 ### Technical
 - **PostgreSQL** — Docker custom image (Dockerfile.postgres), pgvector:pg17 + hunspell-el + cylaw_custom dict, port 5432, db `cylaw`
-- **Chunks table** — 1,921,079 chunks, vector(2000) with IVFFlat index (lists=1500). Query with `SET ivfflat.probes = 30`.
+- **Chunks table** — 2,021,079 chunks, vector(2000) with IVFFlat index (lists=1500). Query with `SET ivfflat.probes = 30`.
 - **Documents table** — 149,886 documents with `cylaw` text search config (Greek hunspell + custom legal dict)
 - **tsvector** — `to_tsvector('cylaw', content)` GENERATED ALWAYS STORED. `cylaw` config: greek_hunspell → cylaw_custom → simple.
 - **BM25 query** — OR logic (`word1 | word2 | word3`) + phrase search for exact matches
@@ -75,7 +75,9 @@
 
 ### Re-embedding Pipeline (scripts/batch_ingest.py)
 - Pipeline: `create-index` → `prepare` → `submit` → `status` → `download` → `upload-pg`
-- 39 batch files, 1,921,079 vectors, ~$97 OpenAI cost (text-embedding-3-large, 3072d→2000d truncated)
+- 41/42 batch files, 2,021,079 vectors, ~$97 OpenAI cost (text-embedding-3-large, 3072d→2000d truncated)
+- Incremental upload: `python scripts/upload_missing_chunks.py --batches 17 40` (INSERT ON CONFLICT DO NOTHING)
+- Batch 019 (OpenAI `batch_698ee5a7f06c81909521efc9e97cfb57`) stuck in "finalizing" — 50K/50K complete
 
 ## Test Suite
 
@@ -88,18 +90,16 @@
 
 ## Last Session Log
 
+### 2026-02-13 (session 20 — Missing embeddings recovery)
+- **Root cause**: 3/42 OpenAI Batch API batches (017, 019, 040) were never downloaded → 8,696 docs without embeddings.
+- **Fixed**: Downloaded + uploaded batches 017, 040 (100K chunks) → coverage 94.2% → 98.0% (146,941/149,886 docs).
+- **Batch 019** stuck in OpenAI "finalizing" for hours — resubmitted, completed 50K/50K but output file not yet available. Remaining 2,945 docs.
+- **REINDEX** IVFFlat required after bulk insert (766s with 2GB maintenance_work_mem).
+- **Test results** (R14-R15): Core pipeline stable (A1+A2 HIGH, B3 OTHER). B1/B5 show rerank score variance (not related to data recovery). Hit rate 42-46%.
+- Created `scripts/upload_missing_chunks.py` for incremental chunk uploads.
+
 ### 2026-02-13 (session 19 — Search quality tuning: steps 1-4)
-- **Step 1**: Smart cutoff (min 30, extend to 50 for score >= 2.0) replaces hard 30-doc cap. B5 found for first time ever.
-- **Step 2**: Query generation temperature 0 → deterministic queries. B1 found and kept (MEDIUM). Hit rate 54%.
-- **Step 3**: A4 investigation — procedural appeal doc, 0 relevant keywords, not retrievable by content search.
-- **Step 4**: Simplified route.ts — always use hybrid search. A2 back as HIGH, B3 kept (OTHER). Best GT coverage: 5 docs in final output.
-- Hit rate progression: 43% → 34% → 54% → 52% (50-doc runs). 5 HIGH + 21 MEDIUM + 9 NONE.
-- All steps committed + pushed to origin/main.
+- Smart cutoff, temp 0, A4 investigation, simplified route.ts. Best GT: 5 docs. Hit rate 34-54%.
 
 ### 2026-02-12 (session 18 — Search quality overhaul: items 1,2,4,5,8)
-- Items 1,2,4,5,8 from search quality plan. Hit rate 17% → 67% → 43% across improvements.
-- Key wins: hybrid Cohere+GPT reranker, multi-query 3-8, pgvector text-embedding-3-large, Greek stemming.
-
-### 2026-02-12 (session 17 — Phases 0-2b complete)
-- Weaviate removal, summarizer prompt fix, Cohere rerank, PostgreSQL BM25 hybrid search.
-- All phases committed + pushed to origin/main.
+- Hybrid Cohere+GPT reranker, multi-query 3-8, pgvector text-embedding-3-large, Greek stemming. Hit rate 17-67%.

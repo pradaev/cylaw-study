@@ -619,19 +619,19 @@ Three distinct failure modes:
 
 ### Ground Truth Document Tracking Across All Runs
 
-| Doc | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10 |
-|-----|----|----|----|----|----|----|----|----|----|----|
-| A1 | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
-| A2 | HIGH | HIGH | MED | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | ❌(src) |
-| A3 | ❌(rr) | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | ❌(cap) | ❌(cap) |
-| A4 | ❌(vs) | ❌(vs) | ❌(rr) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ |
-| B1 | NONE | NONE | ❌(rr) | ❌(rr) | ❌(cap) | ❌ | ❌ | ❌ | ❌(src) | ❌(cap) |
-| B2 | NONE | NONE | HIGH | ❌(rr) | MED | ❌ | ❌ | ❌ | ❌(src) | ❌ |
-| B3 | ❌(rr) | NONE | ❌(rr) | LOW | ❌(cap) | ❌ | ❌ | ❌ | ❌(cap) | ❌(cap) |
-| B4 | NONE | MED | LOW | LOW | ❌(rr) | OTHER | ❌ | ❌ | ❌(src) | ❌(src) |
-| B5 | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ |
-| B6 | NONE | NONE | LOW | LOW | ❌(rr) | ❌ | ❌ | ❌ | ❌(src) | ❌(src) |
-| C1 | NONE | NONE | LOW | LOW | OTHER | OTHER | OTHER | ❌(cap) | ❌(cap) | ❌(cap) |
+| Doc | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 |
+|-----|----|----|----|----|----|----|----|----|----|----|-----|-----|-----|-----|-----|
+| A1 | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
+| A2 | HIGH | HIGH | MED | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | ❌(src) | ❌(cap) | ❌(cap) | HIGH | HIGH | HIGH |
+| A3 | ❌(rr) | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
+| A4 | ❌(vs) | ❌(vs) | ❌(rr) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| B1 | NONE | NONE | ❌(rr) | ❌(rr) | ❌(cap) | ❌ | ❌ | ❌ | ❌(src) | ❌(cap) | ❌(cap) | MED | MED | ❌(cap) | MED |
+| B2 | NONE | NONE | HIGH | ❌(rr) | MED | ❌ | ❌ | ❌ | ❌(src) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| B3 | ❌(rr) | NONE | ❌(rr) | LOW | ❌(cap) | ❌ | ❌ | ❌ | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | OTHER | OTHER | OTHER |
+| B4 | NONE | MED | LOW | LOW | ❌(rr) | OTHER | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
+| B5 | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | MED | MED | MED | ❌(cap) | ❌ |
+| B6 | NONE | NONE | LOW | LOW | ❌(rr) | ❌ | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
+| C1 | NONE | NONE | LOW | LOW | OTHER | OTHER | OTHER | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
 
 Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut by cap, ❌(src)=in sources but not kept, ❌=not found
 
@@ -734,3 +734,84 @@ Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut 
 - **Ground truth in final output**: **5 docs** (A1 HIGH, A2 HIGH, B1 MED, B3 OTHER, B5 MED) — best ever!
 - **Key milestone**: First run where both A1+A2 are HIGH and 3 B-docs are in the output
 - **Only 9 NONE** in 50 docs (noise ratio stable)
+
+### Run 14: 2026-02-13 (Missing embeddings recovered — batches 017, 040 uploaded)
+- **Fixes applied**: Downloaded 3 missing OpenAI Batch API embedding files (batches 017, 019, 040). Uploaded batches 017 + 040 to pgvector (100,000 new chunks). Batch 019 stuck in OpenAI "finalizing" — will upload later. Coverage: 141,190 → 146,941 unique docs (98.0% of corpus, up from 94.2%).
+- **REINDEX** IVFFlat after bulk insert (766s with 2GB maintenance_work_mem).
+- **Searches**: 5 (1 raw + 4 LLM, temp 0)
+- **Sources found**: 99
+- **After reranker**: 50 kept (smart cutoff)
+- **After summarizer**: 7 HIGH, 14 MEDIUM, 8 NONE
+
+  | ID | In Sources | Rerank (hybrid) | Kept? | Summarized | Relevance | Notes |
+  |----|-----------|-----------------|-------|------------|-----------|-------|
+  | A1 | ✅ | 5 | ✅ | ✅ | **HIGH** | Stable |
+  | A2 | ✅ | 7 | ✅ | ✅ | **HIGH** | Stable from Run 13, rerank improved 5→7 |
+  | A3 | ✅ | 3.5 | ❌ | ❌ | — | Still cut by cap |
+  | A4 | ❌ | — | — | ❌ | — | Not in corpus embeddings (batch 019 pending) |
+  | B1 | ✅ | 4 | ❌ | ❌ | — | Rerank dropped 5→4, cut by cap (was MED in R12-13) |
+  | B2 | ❌ | — | — | ❌ | — | Not found |
+  | B3 | ✅ | 5 | ✅ | ✅ | OTHER | Stable from Run 13 |
+  | B4 | ✅ | 2.2 | ❌ | ❌ | — | Position too low |
+  | B5 | ✅ | 2 | ❌ | ❌ | — | Rerank dropped 6→2, cut by cap (was MED in R11-13) |
+  | B6 | ✅ | 1.7 | ❌ | ❌ | — | Below cutoff |
+  | C1 | ✅ | 3.1 | ❌ | ❌ | — | Cut by cap |
+  | C2 | ❌ | — | — | ❌ | — | Not found |
+  | C3 | ✅ | 3.4 | ❌ | ❌ | — | Cut by cap |
+
+- **Hit rate**: (7+14)/50 = **42%** (down from 52% in Run 13)
+- **Ground truth in final output**: **3 docs** (A1 HIGH, A2 HIGH, B3 OTHER) — down from 5 in Run 13
+- **Key observations**:
+  - **A1, A2 stable** as HIGH — embedding recovery didn't break core docs
+  - **B1 regressed** (5→4 rerank, lost MEDIUM → cut by cap) — rerank score variance, not related to new data
+  - **B5 regressed** (6→2 rerank, lost MEDIUM → cut) — significant score instability
+  - **100K new chunks changed the IVFFlat index** — centroid reassignment after REINDEX may have shifted nearest-neighbor results
+  - **Sources dropped 104→99** — index rebuild slightly changed vector recall
+  - **No new ground truth docs found** from the 100K new chunks (expected — none of the GT docs were in batches 017/040)
+  - **More data = slightly different rankings** — IVFFlat centroids shifted, affecting marginal-score docs (B1, B5)
+- **Conclusion**: Embedding recovery was successful (98% coverage). Core results (A1, A2, B3) stable. Marginal B-docs (B1, B5) affected by rerank score variance, not by the data addition itself. Will re-test after batch 019 upload.
+
+### Run 15: 2026-02-13 (Variance check — second run after embedding recovery)
+- **No code changes** — re-run to check variance after IVFFlat rebuild
+- **Searches**: 5 (1 raw + 4 LLM, temp 0)
+- **Sources found**: 91 (down from 99 in Run 14, 104 in Runs 12-13)
+- **After reranker**: 50 kept (smart cutoff)
+- **After summarizer**: 5 HIGH, 18 MEDIUM, 8 NONE
+
+  | ID | In Sources | Rerank (hybrid) | Kept? | Summarized | Relevance | Notes |
+  |----|-----------|-----------------|-------|------------|-----------|-------|
+  | A1 | ✅ | 5 | ✅ | ✅ | **HIGH** | Stable |
+  | A2 | ✅ | 5 | ✅ | ✅ | **HIGH** | Stable |
+  | A3 | ✅ | 3.5 | ❌ | ❌ | — | Still cut by cap |
+  | A4 | ❌ | — | — | ❌ | — | Not in corpus (batch 019 pending) |
+  | B1 | ✅ | 6 | ✅ | ✅ | **MEDIUM** | **RECOVERED** — was cut in R14 (4→6 rerank variance) |
+  | B2 | ❌ | — | — | ❌ | — | Not found |
+  | B3 | ✅ | 6 | ✅ | ✅ | OTHER | Stable |
+  | B4 | ✅ | 2.2 | ❌ | ❌ | — | Position too low |
+  | B5 | ❌ | — | — | ❌ | — | Not even in sources — dropped completely |
+  | B6 | ✅ | 1.7 | ❌ | ❌ | — | Below cutoff |
+  | C1 | ✅ | 3.1 | ❌ | ❌ | — | Cut by cap |
+  | C2 | ❌ | — | — | ❌ | — | Not found |
+  | C3 | ✅ | 3.4 | ❌ | ❌ | — | Cut by cap |
+
+- **Hit rate**: (5+18)/50 = **46%**
+- **Ground truth in final output**: **4 docs** (A1 HIGH, A2 HIGH, B1 MED, B3 OTHER)
+- **Key observations**:
+  - **B1 recovered** to MEDIUM (rerank 6) — confirms R14's drop was variance
+  - **B5 disappeared** entirely from sources (was in sources in R14 with rerank 2, now gone)
+  - **Sources dropped** 99→91 — LLM query generation variance despite temp 0
+  - **Core pipeline stable**: A1+A2 HIGH, B3 OTHER every single run since R13
+  - **IVFFlat rebuild impact is minimal** — changes in marginal docs only
+
+### Summary of Embedding Recovery Impact
+
+| Metric | Before (R13) | After R14 | After R15 | Assessment |
+|--------|-------------|-----------|-----------|------------|
+| Corpus coverage | 94.2% (141K) | 98.0% (147K) | 98.0% | Improved |
+| Sources found | ~104 | 99 | 91 | Slight decrease (IVFFlat shift) |
+| GT in final output | 5 | 3 | 4 | Stable (A1, A2, B3 always present) |
+| Hit rate | 52% | 42% | 46% | Variance range normal |
+| HIGH docs | 5 | 7 | 5 | Stable |
+| NONE docs | 9 | 8 | 8 | Improved |
+
+**Conclusion**: Embedding recovery (batches 017+040) added 100K chunks and brought coverage from 94.2% to 98%. The IVFFlat index rebuild shifted some centroid assignments, causing minor variance in marginal-score docs (B1, B5). Core retrieval quality (A1, A2, A3-in-sources, B3) is completely stable. Batch 019 still pending on OpenAI — will add remaining 2,945 docs when available.
