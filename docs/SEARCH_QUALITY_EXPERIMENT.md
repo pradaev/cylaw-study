@@ -698,3 +698,11 @@ Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut 
   - **27/50 relevant docs** vs 17/50 in Run 11 — huge improvement in quality ratio
   - Sources count stable at 104 — confirms deterministic query generation is more consistent
 - **Remaining**: A2, A3, B3 still cut by cap. A4 still not found. B2 absent (needs investigation)
+
+### Investigation: A4 (`courtOfAppeal/2025/202512-E4-25.md`)
+- **Status**: 65K chars but 0 foreign-law keywords, 0 property keywords, 2 divorce mentions
+- **BM25 rank**: 14,531 (our top-K is 100 — unreachable)
+- **In chunks table**: NO — never embedded (8,696 docs total without embeddings)
+- **Root cause**: This is a **procedural appeal document** about E.R v P.R. It discusses the appeal process, not foreign law or property disputes. Its relevance is through **case-party association** (same parties as A1/A2), not content overlap.
+- **Conclusion**: A4 is **not retrievable by content-based search** for this query. It would require a "related cases by party name" feature — a separate capability, not a search quality bug.
+- **Also discovered**: 8,696 documents (5.8% of corpus) exist in `documents` table (BM25) but not in `chunks` table (vector search). These were never part of the original Vectorize embedding and should be embedded in a future batch job.
