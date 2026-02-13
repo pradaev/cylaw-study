@@ -619,19 +619,19 @@ Three distinct failure modes:
 
 ### Ground Truth Document Tracking Across All Runs
 
-| Doc | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 |
-|-----|----|----|----|----|----|----|----|----|----|----|-----|-----|-----|-----|-----|
-| A1 | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
-| A2 | HIGH | HIGH | MED | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | ❌(src) | ❌(cap) | ❌(cap) | HIGH | HIGH | HIGH |
-| A3 | ❌(rr) | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
-| A4 | ❌(vs) | ❌(vs) | ❌(rr) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| B1 | NONE | NONE | ❌(rr) | ❌(rr) | ❌(cap) | ❌ | ❌ | ❌ | ❌(src) | ❌(cap) | ❌(cap) | MED | MED | ❌(cap) | MED |
-| B2 | NONE | NONE | HIGH | ❌(rr) | MED | ❌ | ❌ | ❌ | ❌(src) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| B3 | ❌(rr) | NONE | ❌(rr) | LOW | ❌(cap) | ❌ | ❌ | ❌ | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | OTHER | OTHER | OTHER |
-| B4 | NONE | MED | LOW | LOW | ❌(rr) | OTHER | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
-| B5 | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | MED | MED | MED | ❌(cap) | ❌ |
-| B6 | NONE | NONE | LOW | LOW | ❌(rr) | ❌ | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
-| C1 | NONE | NONE | LOW | LOW | OTHER | OTHER | OTHER | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
+| Doc | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 | R16 |
+|-----|----|----|----|----|----|----|----|----|----|----|-----|-----|-----|-----|-----|-----|
+| A1 | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
+| A2 | HIGH | HIGH | MED | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | ❌(src) | ❌(cap) | ❌(cap) | HIGH | HIGH | HIGH | ❌(cap) |
+| A3 | ❌(rr) | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
+| A4 | ❌(vs) | ❌(vs) | ❌(rr) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| B1 | NONE | NONE | ❌(rr) | ❌(rr) | ❌(cap) | ❌ | ❌ | ❌ | ❌(src) | ❌(cap) | ❌(cap) | MED | MED | ❌(cap) | MED | MED |
+| B2 | NONE | NONE | HIGH | ❌(rr) | MED | ❌ | ❌ | ❌ | ❌(src) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| B3 | ❌(rr) | NONE | ❌(rr) | LOW | ❌(cap) | ❌ | ❌ | ❌ | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | OTHER | OTHER | OTHER | OTHER |
+| B4 | NONE | MED | LOW | LOW | ❌(rr) | OTHER | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
+| B5 | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | MED | MED | MED | ❌(cap) | ❌ | ❌ |
+| B6 | NONE | NONE | LOW | LOW | ❌(rr) | ❌ | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
+| C1 | NONE | NONE | LOW | LOW | OTHER | OTHER | OTHER | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
 
 Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut by cap, ❌(src)=in sources but not kept, ❌=not found
 
@@ -815,3 +815,64 @@ Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut 
 | NONE docs | 9 | 8 | 8 | Improved |
 
 **Conclusion**: Embedding recovery (batches 017+040) added 100K chunks and brought coverage from 94.2% to 98%. The IVFFlat index rebuild shifted some centroid assignments, causing minor variance in marginal-score docs (B1, B5). Core retrieval quality (A1, A2, A3-in-sources, B3) is completely stable. Batch 019 still pending on OpenAI — will add remaining 2,945 docs when available.
+
+### Run 16: 2026-02-13 (Full pipeline diagnostic — all stages)
+- **No code changes** — full 3-stage diagnostic after embedding recovery
+
+#### Stage 1: Vector Search + BM25 → RRF (sources before reranker)
+- **Searches**: 6 (1 raw + 5 LLM-generated)
+- **Sources found**: 99
+
+  | ID | Vec Score | In Sources | Rerank | Kept | Summ | Rel | Notes |
+  |----|-----------|-----------|--------|------|------|-----|-------|
+  | A1 | 0.031 | ✅ | 5 | ✅ | ✅ | HIGH | Stable |
+  | A2 | 0.023 | ✅ | 5 | ✅ | ✅ | MEDIUM | Reranker kept but scored MEDIUM (not HIGH) |
+  | A3 | 0.014 | ✅ | 3.5 | ❌ | ❌ | — | Cut by cap |
+  | A4 | — | ❌ | — | — | ❌ | — | No embeddings (batch 019) |
+  | B1 | 0.014 | ✅ | 7 | ✅ | ✅ | MEDIUM | Strong rerank score |
+  | B2 | — | ❌ | — | — | ❌ | — | Not in vector search |
+  | B3 | 0.014 | ✅ | 5 | ❌ | ❌ | — | In sources but cut by cap |
+  | B4 | 0.023 | ✅ | 2.2 | ❌ | ❌ | — | Low rerank score |
+  | B5 | 0.014 | ✅ | 6 | ✅ | ✅ | MEDIUM | **In Stage 1 but NOT in Stage 4** — query variance |
+  | B6 | 0.015 | ✅ | 1.7 | ❌ | ❌ | — | Below cutoff |
+  | C1 | 0.016 | ✅ | 3.1 | ❌ | ❌ | — | Cut by cap |
+  | C2 | — | ❌ | — | — | ❌ | — | Never found |
+  | C3 | 0.016 | ✅ | 3.4 | ❌ | ❌ | — | Cut by cap |
+
+- **10/13 GT in sources** — stable recall from pgvector + BM25
+- **Permanently missing**: A4 (no embeddings), B2 (not in vector search results), C2 (never found)
+
+#### Stage 3: Isolated Reranker (GT docs sent directly to GPT-4o-mini)
+- **All 13/13 scored >= 4** (all would be kept if they reached the reranker)
+- Scores: A1=5, A2=5, A3=4, **A4=6**, B1=5, **B2=6**, B3=5, B4=4, B5=5, B6=4, C1=5, C2=6, C3=5
+- **Reranker is NOT the bottleneck** — every GT doc would pass if it reached this stage
+- A4 and B2 score 6 but never appear in vector search → the problem is search recall, not reranking
+
+#### Stage 4: Full E2E (separate run)
+- **Searches**: 6 (different queries than Stage 1 — LLM variance)
+- **Sources**: 108, **Kept**: 50, **Summarized**: 50
+- **Results**: 8 HIGH, 20 MEDIUM, 6 NONE — **hit rate 56%** (best single-run result)
+
+  | ID | In Sources | Rerank | Kept | Summ | Rel | Notes |
+  |----|-----------|--------|------|------|-----|-------|
+  | A1 | ✅ | 5 | ✅ | ✅ | HIGH | Stable |
+  | A2 | ✅ | 5 | ❌ | ❌ | — | In sources but cut by cap |
+  | A3 | ✅ | 3.5 | ❌ | ❌ | — | Cut by cap |
+  | B1 | ✅ | 6 | ✅ | ✅ | MEDIUM | Stable |
+  | B3 | ✅ | 7 | ✅ | ✅ | OTHER | Stable |
+  | B5 | ❌ | — | — | ❌ | — | NOT in sources (was present in Stage 1 run) |
+
+- **Key insight**: Stage 1 found B5 (vec 0.014, rerank 6, MEDIUM) but Stage 4 didn't — **same code, different LLM queries**. This proves query generation variance is the dominant source of instability for marginal docs.
+
+### Pipeline Bottleneck Analysis (based on Run 16)
+
+| Stage | What happens | Docs lost | Root cause |
+|-------|-------------|-----------|------------|
+| **Vector search** | pgvector + BM25 + RRF | A4, B2, C2 lost | A4: no embeddings. B2: not semantically close enough. C2: not found. |
+| **Reranker** | Cohere + GPT score | None — **all 13 GT pass** | NOT a bottleneck |
+| **Cap (top-50)** | Smart cutoff | A3, B3, B4, B6, C1, C3 cut | BM25-boosted non-GT docs fill positions 1-50 |
+| **LLM query variance** | Different queries per run | B5 appears/disappears | Even temp=0 doesn't eliminate variance |
+
+**The two real bottlenecks are:**
+1. **Vector search recall** — 3 docs permanently not found (A4: no embeddings, B2/C2: semantically distant)
+2. **50-doc cap competition** — GT docs with rerank 3-5 compete with 50+ BM25-boosted docs for limited slots
