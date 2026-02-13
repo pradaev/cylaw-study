@@ -183,7 +183,8 @@ export async function POST(request: NextRequest) {
     queryPreview: userQuery.slice(0, 200),
   }));
 
-  // Search via Cloudflare Vectorize (chunk-level, text-embedding-3-small 1536d)
+  // Vectorize client (text-embedding-3-small 1536d) — fallback only, used when pgvector has no data.
+  // TODO: Remove after deploying hosted PostgreSQL (Neon/Supabase) to production.
   const vectorizeClient =
     isDev || isNodeRuntime
       ? createHttpClient()
@@ -194,11 +195,9 @@ export async function POST(request: NextRequest) {
         })();
   const vectorizeSearchFn = createVectorizeSearchFn(vectorizeClient);
 
-  // Hybrid search: Vectorize (vector) + PostgreSQL (BM25) via RRF fusion
-  // Falls back to Vectorize-only if DATABASE_URL is not set
-  const searchFn = process.env.DATABASE_URL
-    ? createHybridSearchFn(vectorizeSearchFn)
-    : vectorizeSearchFn;
+  // Hybrid search: pgvector (primary) + BM25 → RRF fusion.
+  // Automatically falls back to Vectorize if pgvector has no data (production without hosted PG).
+  const searchFn = createHybridSearchFn(vectorizeSearchFn);
 
   // Get Summarizer binding (Cloudflare Workers only; Node uses direct OpenAI)
   let summarizerBinding: Fetcher | undefined;

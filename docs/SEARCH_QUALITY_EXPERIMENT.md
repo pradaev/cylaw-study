@@ -706,3 +706,31 @@ Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut 
 - **Root cause**: This is a **procedural appeal document** about E.R v P.R. It discusses the appeal process, not foreign law or property disputes. Its relevance is through **case-party association** (same parties as A1/A2), not content overlap.
 - **Conclusion**: A4 is **not retrievable by content-based search** for this query. It would require a "related cases by party name" feature — a separate capability, not a search quality bug.
 - **Also discovered**: 8,696 documents (5.8% of corpus) exist in `documents` table (BM25) but not in `chunks` table (vector search). These were never part of the original Vectorize embedding and should be embedded in a future batch job.
+
+### Run 13: 2026-02-13 (Simplified route.ts — always use hybrid search)
+- **Fixes applied**: Removed conditional `DATABASE_URL ? hybrid : vectorize` — always use `createHybridSearchFn` which handles all fallbacks internally. Added TODO to remove Vectorize after hosted PG deployment.
+- **Searches**: 5 (1 raw + 4 LLM, temp 0)
+- **Sources found**: ~104
+- **After reranker**: 50 kept (smart cutoff)
+- **After summarizer**: 5 HIGH, 21 MEDIUM, 9 NONE
+
+  | ID | In Sources | Rerank (hybrid) | Kept? | Summarized | Relevance | Notes |
+  |----|-----------|-----------------|-------|------------|-----------|-------|
+  | A1 | ✅ | 5 | ✅ | ✅ | **HIGH** | Stable |
+  | A2 | ✅ | 5 | ✅ | ✅ | **HIGH** | **BACK**: First time in final output since Run 8! |
+  | A3 | ✅ | 3.5 | ❌ | ❌ | — | Still cut by cap |
+  | A4 | ❌ | — | — | ❌ | — | Not in corpus embeddings |
+  | B1 | ✅ | 5 | ✅ | ✅ | **MEDIUM** | Stable from Run 12 |
+  | B2 | ❌ | — | — | ❌ | — | Not found |
+  | B3 | ✅ | 6 | ✅ | ✅ | OTHER | **NEW**: First time kept since Run 4! (score 6) |
+  | B4 | ✅ | 2.2 | ❌ | ❌ | — | Position too low |
+  | B5 | ✅ | 6 | ✅ | ✅ | **MEDIUM** | Stable from Run 11 |
+  | B6 | ✅ | 1.7 | ❌ | ❌ | — | Below cutoff |
+  | C1 | ✅ | 3.1 | ❌ | ❌ | — | Cut by cap |
+  | C2 | ❌ | — | — | ❌ | — | Not found |
+  | C3 | ✅ | 3.4 | ❌ | ❌ | — | Cut by cap |
+
+- **Hit rate**: (5+21)/50 = **52%**
+- **Ground truth in final output**: **5 docs** (A1 HIGH, A2 HIGH, B1 MED, B3 OTHER, B5 MED) — best ever!
+- **Key milestone**: First run where both A1+A2 are HIGH and 3 B-docs are in the output
+- **Only 9 NONE** in 50 docs (noise ratio stable)

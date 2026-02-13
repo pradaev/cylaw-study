@@ -26,10 +26,10 @@
 
 ## Current Problems
 
-- **30-doc cap is bottleneck** — pgvector finds 10/13 ground truth docs in sources but only 2 survive the 30-doc cap. B2 (score 6) and B3 (score 5) cut.
-- **A4 still not found** — Court of Appeal path structure, not in any search results
-- **B5 still not found** — not surfaced by pgvector either
-- **Hit rate 43%** — better recall but more noise competing for 30 slots
+- **A4 not retrievable** — procedural appeal doc with 0 relevant keywords, BM25 rank 14531. Only connected via case-party association (E.R v P.R), not content. Needs "related cases" feature.
+- **A3 still cut by cap** — rerank 3.5 consistently, but position 51+ in effective score ranking
+- **B2 intermittent** — appears in some runs, absent in others (LLM query variance)
+- **8,696 docs without embeddings** — 5.8% of corpus never embedded (need future batch job)
 
 ## What's Next
 
@@ -88,24 +88,18 @@
 
 ## Last Session Log
 
+### 2026-02-13 (session 19 — Search quality tuning: steps 1-4)
+- **Step 1**: Smart cutoff (min 30, extend to 50 for score >= 2.0) replaces hard 30-doc cap. B5 found for first time ever.
+- **Step 2**: Query generation temperature 0 → deterministic queries. B1 found and kept (MEDIUM). Hit rate 54%.
+- **Step 3**: A4 investigation — procedural appeal doc, 0 relevant keywords, not retrievable by content search.
+- **Step 4**: Simplified route.ts — always use hybrid search. A2 back as HIGH, B3 kept (OTHER). Best GT coverage: 5 docs in final output.
+- Hit rate progression: 43% → 34% → 54% → 52% (50-doc runs). 5 HIGH + 21 MEDIUM + 9 NONE.
+- All steps committed + pushed to origin/main.
+
 ### 2026-02-12 (session 18 — Search quality overhaul: items 1,2,4,5,8)
-- **Item 1**: Hybrid Cohere+GPT reranker — two-pass reranking, Cohere first, GPT rescue for low-scoring docs. Hit rate 33%.
-- **Item 2**: Summarizer temperature 0 — minimal impact (was already 0.1). Deterministic output confirmed.
-- **Item 5**: Greek stemming — custom Dockerfile with hunspell-el, cylaw text search config, Greek stop words. BM25 improved.
-- **Item 8**: Adaptive multi-query (3-8) + raw user query search — hit rate jumped to 67%.
-- **Item 4**: Re-embed with text-embedding-3-large (3072d→2000d for pgvector HNSW limit).
-  - 1.92M chunks uploaded, IVFFlat index built (12 min). 
-  - Recall improved: 10/13 ground truth docs found (was 6/13). 5 new B-docs surfaced.
-  - Hit rate 43% — more noise competing for 30-doc cap.
-- All items committed + pushed to origin/main.
+- Items 1,2,4,5,8 from search quality plan. Hit rate 17% → 67% → 43% across improvements.
+- Key wins: hybrid Cohere+GPT reranker, multi-query 3-8, pgvector text-embedding-3-large, Greek stemming.
 
 ### 2026-02-12 (session 17 — Phases 0-2b complete)
-- **Phase 0**: Weaviate removal. Committed + pushed.
-- **Phase 1**: Summarizer prompt decoupled engagement from relevance. True A+B positives: 1→4. Committed + pushed.
-- **Phase 2a**: Cohere rerank-v3.5 with GPT-4o-mini fallback. Tested live. Committed + pushed.
-- **Phase 2b**: PostgreSQL + BM25 hybrid search via RRF fusion.
-  - Docker pgvector/pgvector:pg17, 149,886 docs ingested (242 docs/s, 10 min).
-  - BM25 finds A1 (rank 2), A3 (rank 12), B5 (rank 30), A4 (rank 1665).
-  - BM25 boost in reranker: top-50 BM25 docs get sorting boost (max 5.0).
-  - Result: A1 promoted from "dropped" to **HIGH**. 61-79 sources (up from 50).
+- Weaviate removal, summarizer prompt fix, Cohere rerank, PostgreSQL BM25 hybrid search.
 - All phases committed + pushed to origin/main.
