@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   doc_id       TEXT NOT NULL,                -- e.g. "apofaseised/oik/2024/2320240403.md"
   chunk_index  INT NOT NULL,                 -- 0-based chunk index within document
   content      TEXT NOT NULL,                -- chunk text (with contextual header)
-  embedding    vector(2000) NOT NULL,        -- text-embedding-3-large (truncated from 3072 for HNSW)
+  embedding    vector(2000) NOT NULL,        -- text-embedding-3-large (truncated; pgvector 2000d limit for all index types)
   court        TEXT NOT NULL DEFAULT '',      -- court code
   court_level  TEXT NOT NULL DEFAULT 'other', -- supreme, appeal, first_instance, etc.
   year         INT NOT NULL DEFAULT 0,
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 
 -- Vector search index (IVFFlat: fast build for 2M+ vectors at 2000d)
--- pgvector HNSW limit: 2000 dimensions. IVFFlat chosen for faster build times.
+-- Both HNSW and IVFFlat cap at 2000 dimensions in pgvector.
 -- Build AFTER bulk load for best performance. Set ivfflat.probes=30 at query time.
 -- CREATE INDEX idx_chunks_embedding ON chunks
 --   USING ivfflat (embedding vector_cosine_ops) WITH (lists = 1500);

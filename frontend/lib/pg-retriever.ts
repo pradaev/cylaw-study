@@ -27,7 +27,7 @@ const MIN_SCORE_THRESHOLD = 0.42; // absolute floor for cosine similarity
 const SCORE_DROP_FACTOR = 0.75;   // adaptive: drop docs scoring < 75% of best
 
 const PGVECTOR_EMBEDDING_MODEL = "text-embedding-3-large";
-const PGVECTOR_DIMS = 2000;  // truncated from 3072 for HNSW index (pgvector 2000d limit)
+const PGVECTOR_DIMS = 2000;  // text-embedding-3-large truncated (pgvector 2000d index limit for both HNSW and IVFFlat)
 
 // ── PostgreSQL connection pool ──────────────────────────
 

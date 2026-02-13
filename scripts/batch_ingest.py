@@ -1005,7 +1005,7 @@ def step_upload_pg() -> None:
                 if idx >= len(meta_index):
                     continue
                 meta = meta_index[idx]
-                # Truncate 3072d → 2000d (Matryoshka-compatible) for HNSW index limit
+                # Truncate 3072d → 2000d (Matryoshka-compatible) — pgvector 2000d limit for all index types
                 truncated = emb["embedding"][:2000]
                 vec_str = "[" + ",".join(f"{v:.8f}" for v in truncated) + "]"
                 batch_buf.append((
@@ -1033,17 +1033,17 @@ def step_upload_pg() -> None:
     if skipped_files > 0:
         print(f"  Skipped {skipped_files} corrupted JSON lines")
 
-    # Build HNSW index (2000d max for pgvector HNSW)
-    print("\n  Building HNSW index on chunks.embedding (this may take 30-60 min)...")
-    print("  Parameters: m=16, ef_construction=200, 2000 dimensions")
+    # Build IVFFlat index (no dimension limit, faster build than HNSW for large datasets)
+    print("\n  Building IVFFlat index on chunks.embedding...")
+    print(f"  Parameters: lists=1500, {OPENAI_DIMS} dimensions")
     idx_t0 = time.time()
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks
-          USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 200)
+          USING ivfflat (embedding vector_cosine_ops) WITH (lists = 1500)
     """)
     conn.commit()
     idx_elapsed = time.time() - idx_t0
-    print(f"  HNSW index built in {idx_elapsed:.0f}s")
+    print(f"  IVFFlat index built in {idx_elapsed:.0f}s")
 
     # Analyze
     print("  Running ANALYZE chunks...")
