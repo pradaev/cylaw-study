@@ -1098,7 +1098,7 @@ async function streamOpenAI(
       model: modelCfg.modelId,
       messages: apiMessages,
       tools: [SEARCH_TOOL],
-      temperature: 0.1,
+      temperature: 0, // deterministic query generation to reduce LLM variance between runs
     });
 
     if (response.usage) {
@@ -1285,7 +1285,7 @@ async function streamClaude(
       system,
       messages: apiMessages,
       tools: [CLAUDE_SEARCH_TOOL],
-      temperature: 0.1,
+      temperature: 0, // deterministic query generation to reduce LLM variance between runs
     });
 
     totalInputTokens += response.usage.input_tokens;

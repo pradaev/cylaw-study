@@ -666,3 +666,35 @@ Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut 
 - **Key win**: **B5 found for the first time ever!** (rerank score 6, MEDIUM). This doc was missed by ALL previous search methods.
 - **Key issue**: BM25 boost (max 5.0) inflates effective scores of keyword-matched docs, pushing quality rerank-only docs (A2, A3, B3 with scores 3.5-5) below position 50
 - **10/13 GT in sources** (same as Run 9) — pgvector recall is stable
+
+### Run 12: 2026-02-13 (Temperature 0 for query generation)
+- **Fixes applied**: `temperature: 0.1` → `0` for main LLM call (OpenAI + Claude) that generates search queries
+- **Searches**: 5 (1 raw query + 4 LLM-generated — deterministic)
+- **Sources found**: 104 (same as Runs 10-11 — confirms determinism)
+- **After reranker**: 50 kept (smart cutoff extended to max)
+- **After summarizer**: 7 HIGH, 20 MEDIUM, 7 NONE
+
+  | ID | In Sources | Rerank (hybrid) | Kept? | Summarized | Relevance | Notes |
+  |----|-----------|-----------------|-------|------------|-----------|-------|
+  | A1 | ✅ | 5 | ✅ | ✅ | **HIGH** | Stable |
+  | A2 | ✅ | 5 | ❌ | ❌ | — | Still cut by cap (BM25-boosted docs outrank) |
+  | A3 | ✅ | 3.5 | ❌ | ❌ | — | Still cut by cap |
+  | A4 | ❌ | — | — | ❌ | — | Not found |
+  | B1 | ✅ | 6 | ✅ | ✅ | **MEDIUM** | **NEW**: First time kept since Run 2! Rerank 6 |
+  | B2 | ❌ | — | — | ❌ | — | Not found (query variance — even at temp 0, not fully deterministic) |
+  | B3 | ✅ | 2 | ❌ | ❌ | — | Rerank dropped to 2 (was 5 in Run 11) — score variance |
+  | B4 | ✅ | 2.2 | ❌ | ❌ | — | Position too low |
+  | B5 | ✅ | 6 | ✅ | ✅ | **MEDIUM** | Stable from Run 11 — confirmed! |
+  | B6 | ✅ | 1.7 | ❌ | ❌ | — | Below cutoff |
+  | C1 | ✅ | 3.1 | ❌ | ❌ | — | Cut by cap |
+  | C2 | ❌ | — | — | ❌ | — | Not found |
+  | C3 | ✅ | 3.4 | ❌ | ❌ | — | Cut by cap |
+
+- **Hit rate**: (7+20)/50 = **54%** (up from 34% in Run 11)
+- **Key wins**:
+  - **B1 kept + MEDIUM** for first time since early runs (rerank score 6)
+  - **B5 stable** at MEDIUM (rerank 6) — confirmed the Run 11 discovery
+  - **Only 7 NONE** (down from 12 in Run 11) — noise dramatically reduced
+  - **27/50 relevant docs** vs 17/50 in Run 11 — huge improvement in quality ratio
+  - Sources count stable at 104 — confirms deterministic query generation is more consistent
+- **Remaining**: A2, A3, B3 still cut by cap. A4 still not found. B2 absent (needs investigation)
