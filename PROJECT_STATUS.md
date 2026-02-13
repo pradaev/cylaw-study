@@ -7,7 +7,7 @@
 ## What Works Now
 
 - **Hybrid search pipeline** — pgvector (2000d, text-embedding-3-large) + PostgreSQL BM25 (keyword) → RRF fusion → Cohere+GPT rerank → summarize
-- **pgvector embeddings** — 2.02M chunks with text-embedding-3-large (3072d→2000d Matryoshka), IVFFlat index (1500 lists, probes=30), 98% corpus coverage (146,941/149,886 docs)
+- **pgvector embeddings** — 2.07M chunks with text-embedding-3-large (3072d→2000d Matryoshka), IVFFlat index (1500 lists, probes=30), 100% corpus coverage (149,886/149,886 docs)
 - **BM25 keyword search** — PostgreSQL `cylaw` text search config (Greek hunspell + custom legal dict + stop words), 149,886 full documents
 - **BM25 phrase search** — `phraseto_tsquery` for exact statute/article/case number matches
 - **Hybrid Cohere+GPT reranker** — Cohere rerank-v3.5 first pass, GPT-4o-mini rescue for low-Cohere docs
@@ -75,9 +75,9 @@
 
 ### Re-embedding Pipeline (scripts/batch_ingest.py)
 - Pipeline: `create-index` → `prepare` → `submit` → `status` → `download` → `upload-pg`
-- 41/42 batch files, 2,021,079 vectors, ~$97 OpenAI cost (text-embedding-3-large, 3072d→2000d truncated)
-- Incremental upload: `python scripts/upload_missing_chunks.py --batches 17 40` (INSERT ON CONFLICT DO NOTHING)
-- Batch 019 (OpenAI `batch_698ee5a7f06c81909521efc9e97cfb57`) stuck in "finalizing" — 50K/50K complete
+- 42/42 batch files, 2,071,079 vectors, ~$97 OpenAI cost (text-embedding-3-large, 3072d→2000d truncated)
+- Incremental upload: `python scripts/upload_missing_chunks.py --batches 17 40 19` (INSERT ON CONFLICT DO NOTHING)
+- All batches complete — 100% corpus coverage
 
 ## Test Suite
 
@@ -90,16 +90,17 @@
 
 ## Last Session Log
 
+### 2026-02-13 (session 21 — Full embedding recovery + definitive A4 diagnosis)
+- **Batch 019** finally completed → downloaded 2.1GB, uploaded 50K chunks to pgvector.
+- **100% corpus coverage**: 2,071,079 chunks, 149,886 docs, 0 missing.
+- **REINDEX** IVFFlat (795s with 2GB maintenance_work_mem).
+- **A4 DEFINITIVELY PROVEN**: Has 41 chunks now but STILL not found by vector search → problem is **semantic distance**, not missing data.
+- **Run 17**: Full pipeline diagnostic with complete data. 5 GT docs in E2E (A1 HIGH, A2 MED, B1 MED, B3 OTHER, B5 OTHER). Hit rate 36%.
+- All experiments documented in `docs/SEARCH_QUALITY_EXPERIMENT.md`.
+
 ### 2026-02-13 (session 20 — Missing embeddings recovery)
-- **Root cause**: 3/42 OpenAI Batch API batches (017, 019, 040) were never downloaded → 8,696 docs without embeddings.
-- **Fixed**: Downloaded + uploaded batches 017, 040 (100K chunks) → coverage 94.2% → 98.0% (146,941/149,886 docs).
-- **Batch 019** stuck in OpenAI "finalizing" for hours — resubmitted, completed 50K/50K but output file not yet available. Remaining 2,945 docs.
-- **REINDEX** IVFFlat required after bulk insert (766s with 2GB maintenance_work_mem).
-- **Test results** (R14-R15): Core pipeline stable (A1+A2 HIGH, B3 OTHER). B1/B5 show rerank score variance (not related to data recovery). Hit rate 42-46%.
-- Created `scripts/upload_missing_chunks.py` for incremental chunk uploads.
+- Downloaded + uploaded batches 017, 040. Created `scripts/upload_missing_chunks.py` for incremental uploads.
+- Test results (R14-R16): Core pipeline stable, hit rate 42-56%.
 
 ### 2026-02-13 (session 19 — Search quality tuning: steps 1-4)
 - Smart cutoff, temp 0, A4 investigation, simplified route.ts. Best GT: 5 docs. Hit rate 34-54%.
-
-### 2026-02-12 (session 18 — Search quality overhaul: items 1,2,4,5,8)
-- Hybrid Cohere+GPT reranker, multi-query 3-8, pgvector text-embedding-3-large, Greek stemming. Hit rate 17-67%.

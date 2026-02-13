@@ -205,9 +205,10 @@ def main():
 
     # REINDEX since we added significant data to IVFFlat
     print("\nREINDEXing chunks.embedding (IVFFlat needs rebuild for new data)...")
+    conn.autocommit = True
+    cur.execute("SET maintenance_work_mem = '2GB'")
     idx_t0 = time.time()
     cur.execute("REINDEX INDEX idx_chunks_embedding")
-    conn.commit()
     idx_elapsed = time.time() - idx_t0
     print(f"  REINDEX done in {idx_elapsed:.0f}s")
 

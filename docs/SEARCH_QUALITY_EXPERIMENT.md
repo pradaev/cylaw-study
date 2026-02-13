@@ -619,19 +619,21 @@ Three distinct failure modes:
 
 ### Ground Truth Document Tracking Across All Runs
 
-| Doc | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 | R16 |
-|-----|----|----|----|----|----|----|----|----|----|----|-----|-----|-----|-----|-----|-----|
-| A1 | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
-| A2 | HIGH | HIGH | MED | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | ❌(src) | ❌(cap) | ❌(cap) | HIGH | HIGH | HIGH | ❌(cap) |
-| A3 | ❌(rr) | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
-| A4 | ❌(vs) | ❌(vs) | ❌(rr) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| B1 | NONE | NONE | ❌(rr) | ❌(rr) | ❌(cap) | ❌ | ❌ | ❌ | ❌(src) | ❌(cap) | ❌(cap) | MED | MED | ❌(cap) | MED | MED |
-| B2 | NONE | NONE | HIGH | ❌(rr) | MED | ❌ | ❌ | ❌ | ❌(src) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| B3 | ❌(rr) | NONE | ❌(rr) | LOW | ❌(cap) | ❌ | ❌ | ❌ | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | OTHER | OTHER | OTHER | OTHER |
-| B4 | NONE | MED | LOW | LOW | ❌(rr) | OTHER | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
-| B5 | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | MED | MED | MED | ❌(cap) | ❌ | ❌ |
-| B6 | NONE | NONE | LOW | LOW | ❌(rr) | ❌ | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
-| C1 | NONE | NONE | LOW | LOW | OTHER | OTHER | OTHER | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
+| Doc | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 | R16 | R17 |
+|-----|----|----|----|----|----|----|----|----|----|----|-----|-----|-----|-----|-----|-----|-----|
+| A1 | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
+| A2 | HIGH | HIGH | MED | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | ❌(src) | ❌(cap) | ❌(cap) | HIGH | HIGH | HIGH | ❌(cap) | MED |
+| A3 | ❌(rr) | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
+| A4 | ❌(vs) | ❌(vs) | ❌(rr) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌(sem) |
+| B1 | NONE | NONE | ❌(rr) | ❌(rr) | ❌(cap) | ❌ | ❌ | ❌ | ❌(src) | ❌(cap) | ❌(cap) | MED | MED | ❌(cap) | MED | MED | MED |
+| B2 | NONE | NONE | HIGH | ❌(rr) | MED | ❌ | ❌ | ❌ | ❌(src) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| B3 | ❌(rr) | NONE | ❌(rr) | LOW | ❌(cap) | ❌ | ❌ | ❌ | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | OTHER | OTHER | OTHER | OTHER | OTHER |
+| B4 | NONE | MED | LOW | LOW | ❌(rr) | OTHER | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
+| B5 | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | MED | MED | MED | ❌(cap) | ❌ | ❌ | OTHER |
+| B6 | NONE | NONE | LOW | LOW | ❌(rr) | ❌ | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
+| C1 | NONE | NONE | LOW | LOW | OTHER | OTHER | OTHER | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
+
+Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut by cap, ❌(src)=in sources but not kept, ❌=not found, ❌(sem)=has embeddings but semantically distant
 
 Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut by cap, ❌(src)=in sources but not kept, ❌=not found
 
@@ -876,3 +878,52 @@ Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut 
 **The two real bottlenecks are:**
 1. **Vector search recall** — 3 docs permanently not found (A4: no embeddings, B2/C2: semantically distant)
 2. **50-doc cap competition** — GT docs with rerank 3-5 compete with 50+ BM25-boosted docs for limited slots
+
+### Run 17: 2026-02-13 (100% corpus coverage — all 42 batches loaded, 2,071,079 chunks, 149,886 docs)
+- **Fixes applied**: Downloaded + uploaded batch 019 (50K chunks). REINDEX IVFFlat (795s). Zero missing documents.
+- **A4 now has 41 chunks** with embeddings — previously had 0.
+
+#### Stage 1: Vector Search + BM25 → RRF
+
+  | ID | Vec Score | In Sources | Rerank | Kept | Summ | Rel | Notes |
+  |----|-----------|-----------|--------|------|------|-----|-------|
+  | A1 | 0.031 | ✅ | 5 | ✅ | ✅ | HIGH | Stable |
+  | A2 | 0.023 | ✅ | 5 | ✅ | ✅ | HIGH | Stable |
+  | A3 | 0.014 | ✅ | 3.5 | ❌ | ❌ | — | Cut by cap |
+  | **A4** | **—** | **❌** | — | — | ❌ | — | **STILL NOT FOUND despite having 41 chunks now** |
+  | B1 | 0.014 | ✅ | 5 | ❌ | ❌ | — | In sources but cut by cap |
+  | B2 | — | ❌ | — | — | ❌ | — | Not in vector search |
+  | B3 | 0.014 | ✅ | 6 | ✅ | ✅ | ? | Kept |
+  | B4 | 0.022 | ✅ | 2.2 | ❌ | ❌ | — | Low rerank score |
+  | B5 | — | ❌ | — | — | ❌ | — | Not in sources (variance) |
+  | B6 | 0.015 | ✅ | 1.7 | ❌ | ❌ | — | Below cutoff |
+  | C1 | 0.016 | ✅ | 3.1 | ❌ | ❌ | — | Cut by cap |
+  | C2 | — | ❌ | — | — | ❌ | — | Never found |
+  | C3 | 0.016 | ✅ | 3.4 | ❌ | ❌ | — | Cut by cap |
+
+- **CRITICAL FINDING**: A4 has embeddings now but STILL doesn't appear in vector search. This definitively proves the A4 problem is **semantic distance, not missing data**. The appeal document discusses procedure, not foreign law/property disputes.
+
+#### Stage 3: Isolated Reranker — all 13/13 pass (A4=6, B2=6)
+
+#### Stage 4: Full E2E
+- Sources: 97, Kept: 50, Hit rate: 36%
+- **5 GT docs in final output**: A1 HIGH, A2 MED, B1 MED, B3 OTHER, B5 OTHER
+
+  | ID | In Sources | Rerank | Kept | Summ | Rel | Notes |
+  |----|-----------|--------|------|------|-----|-------|
+  | A1 | ✅ | 5 | ✅ | ✅ | HIGH | Stable |
+  | A2 | ✅ | 5 | ✅ | ✅ | MEDIUM | Stable (in output) |
+  | A3 | ✅ | 3.5 | ❌ | ❌ | — | Cut by cap |
+  | A4 | ❌ | — | — | ❌ | — | Not found |
+  | B1 | ✅ | 6 | ✅ | ✅ | MEDIUM | Stable |
+  | B3 | ✅ | 5 | ✅ | ✅ | OTHER | Stable |
+  | B5 | ✅ | 6 | ✅ | ✅ | OTHER | Back in output |
+
+### Final Embedding Recovery Verdict
+
+| Question | Answer |
+|----------|--------|
+| Did missing embeddings cause A4 to be unfound? | **NO** — A4 now has 41 chunks but still not in vector search |
+| What causes A4 to be unfound? | **Semantic distance** — procedural appeal doc with 0 relevant keywords |
+| Did 100% coverage improve results? | **Marginally** — B5 reappeared, hit rate varies 36-56% (normal range) |
+| Was the re-embedding worth it? | **Yes for data integrity** (100% coverage), but NOT the cause of any GT doc failures |
