@@ -619,21 +619,22 @@ Three distinct failure modes:
 
 ### Ground Truth Document Tracking Across All Runs
 
-| Doc | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 | R16 | R17 |
-|-----|----|----|----|----|----|----|----|----|----|----|-----|-----|-----|-----|-----|-----|-----|
-| A1 | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
-| A2 | HIGH | HIGH | MED | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | ❌(src) | ❌(cap) | ❌(cap) | HIGH | HIGH | HIGH | ❌(cap) | MED |
-| A3 | ❌(rr) | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
-| A4 | ❌(vs) | ❌(vs) | ❌(rr) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌(sem) |
-| B1 | NONE | NONE | ❌(rr) | ❌(rr) | ❌(cap) | ❌ | ❌ | ❌ | ❌(src) | ❌(cap) | ❌(cap) | MED | MED | ❌(cap) | MED | MED | MED |
-| B2 | NONE | NONE | HIGH | ❌(rr) | MED | ❌ | ❌ | ❌ | ❌(src) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| B3 | ❌(rr) | NONE | ❌(rr) | LOW | ❌(cap) | ❌ | ❌ | ❌ | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | OTHER | OTHER | OTHER | OTHER | OTHER |
-| B4 | NONE | MED | LOW | LOW | ❌(rr) | OTHER | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
-| B5 | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | MED | MED | MED | ❌(cap) | ❌ | ❌ | OTHER |
-| B6 | NONE | NONE | LOW | LOW | ❌(rr) | ❌ | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) |
-| C1 | NONE | NONE | LOW | LOW | OTHER | OTHER | OTHER | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) |
+| Doc | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 | R16 | R17 | R18 | R19 |
+|-----|----|----|----|----|----|----|----|----|----|----|-----|-----|-----|-----|-----|-----|-----|-----|-----|
+| A1 | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
+| A2 | HIGH | HIGH | MED | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | ❌(src) | ❌(cap) | ❌(cap) | HIGH | HIGH | HIGH | ❌(cap) | MED | HIGH | HIGH |
+| A3 | ❌(rr) | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | **HIGH** | HIGH |
+| A4 | ❌(vs) | ❌(vs) | ❌(rr) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌(sem) | ❌(sem) | ❌(sem) |
+| B1 | NONE | NONE | ❌(rr) | ❌(rr) | ❌(cap) | ❌ | ❌ | ❌ | ❌(src) | ❌(cap) | ❌(cap) | MED | MED | ❌(cap) | MED | MED | MED | MED | MED |
+| B2 | NONE | NONE | HIGH | ❌(rr) | MED | ❌ | ❌ | ❌ | ❌(src) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| B3 | ❌(rr) | NONE | ❌(rr) | LOW | ❌(cap) | ❌ | ❌ | ❌ | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | OTHER | OTHER | OTHER | OTHER | OTHER | OTHER | OTHER |
+| B4 | NONE | MED | LOW | LOW | ❌(rr) | OTHER | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | **OTHER** | OTHER |
+| B5 | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ | MED | MED | MED | ❌(cap) | ❌ | ❌ | OTHER | MED | MED |
+| B6 | NONE | NONE | LOW | LOW | ❌(rr) | ❌ | ❌ | ❌ | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(src) | ❌(cut) | ❌(cut) |
+| C1 | NONE | NONE | LOW | LOW | OTHER | OTHER | OTHER | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | ❌(cap) | **OTHER** | OTHER |
+| C3 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | **OTHER** | OTHER |
 
-Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut by cap, ❌(src)=in sources but not kept, ❌=not found, ❌(sem)=has embeddings but semantically distant
+Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut by cap=50, ❌(cut)=below smart cutoff, ❌(src)=in sources but not kept, ❌=not found, ❌(sem)=has embeddings but semantically distant
 
 Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut by cap, ❌(src)=in sources but not kept, ❌=not found
 
@@ -866,18 +867,19 @@ Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut 
 
 - **Key insight**: Stage 1 found B5 (vec 0.014, rerank 6, MEDIUM) but Stage 4 didn't — **same code, different LLM queries**. This proves query generation variance is the dominant source of instability for marginal docs.
 
-### Pipeline Bottleneck Analysis (based on Run 16)
+### Pipeline Bottleneck Analysis (updated after R18-R21 tuning)
 
-| Stage | What happens | Docs lost | Root cause |
-|-------|-------------|-----------|------------|
-| **Vector search** | pgvector + BM25 + RRF | A4, B2, C2 lost | A4: no embeddings. B2: not semantically close enough. C2: not found. |
-| **Reranker** | Cohere + GPT score | None — **all 13 GT pass** | NOT a bottleneck |
-| **Cap (top-50)** | Smart cutoff | A3, B3, B4, B6, C1, C3 cut | BM25-boosted non-GT docs fill positions 1-50 |
-| **LLM query variance** | Different queries per run | B5 appears/disappears | Even temp=0 doesn't eliminate variance |
+| Stage | What happens | Docs lost | Root cause | Status |
+|-------|-------------|-----------|------------|--------|
+| **Vector search** | pgvector + BM25 + RRF | A4, B2, C2 lost | Semantic distance — queries don't match these docs' vocabulary | **HARD LIMIT** |
+| **Reranker** | Cohere + GPT score | None — all 13 GT pass | NOT a bottleneck | ✅ |
+| **Cap (top-75)** | Smart cutoff | B6 cut (rerank 1.7) | Effective score too low for top-75 | **MOSTLY SOLVED** (was 6 docs lost at cap=50) |
+| **LLM query variance** | Different queries per run | B5 appears/disappears | Even temp=0 doesn't eliminate variance | **INHERENT** |
 
-**The two real bottlenecks are:**
-1. **Vector search recall** — 3 docs permanently not found (A4: no embeddings, B2/C2: semantically distant)
-2. **50-doc cap competition** — GT docs with rerank 3-5 compete with 50+ BM25-boosted docs for limited slots
+**After tuning (R19 config):**
+- Cap raised 50→75 solved the cap bottleneck (recovered A3, B4, C1, C3)
+- BM25 boost reduced 5→2 improved signal-to-noise without losing GT docs
+- Remaining unfound docs (A4, B2, C2) are vector search recall problems that require fundamentally different approaches (party-name search, broader query facets)
 
 ### Run 17: 2026-02-13 (100% corpus coverage — all 42 batches loaded, 2,071,079 chunks, 149,886 docs)
 - **Fixes applied**: Downloaded + uploaded batch 019 (50K chunks). REINDEX IVFFlat (795s). Zero missing documents.
@@ -927,3 +929,91 @@ Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut 
 | What causes A4 to be unfound? | **Semantic distance** — procedural appeal doc with 0 relevant keywords |
 | Did 100% coverage improve results? | **Marginally** — B5 reappeared, hit rate varies 36-56% (normal range) |
 | Was the re-embedding worth it? | **Yes for data integrity** (100% coverage), but NOT the cause of any GT doc failures |
+
+### Run 18: 2026-02-13 (SUMMARIZE_DOCS_MAX 50 → 75)
+- **Hypothesis**: GT docs A3, B1, B4, C1, C3 are in sources but cut by the 50-doc cap. Raising to 75 should include them.
+- **Config changes**: `SUMMARIZE_DOCS_MAX = 75` (was 50)
+- **Searches**: 6 (LLM-generated)
+- **Sources found**: 99, **Kept**: 75, **Summarized**: 75
+
+  | ID | In Sources | Rerank | Kept | Summ | Rel | Notes |
+  |----|-----------|--------|------|------|-----|-------|
+  | A1 | ✅ | 5 | ✅ | ✅ | HIGH | Stable |
+  | A2 | ✅ | 5 | ✅ | ✅ | HIGH | Stable |
+  | A3 | ✅ | 3.5 | ✅ | ✅ | **HIGH** | **BACK** — was cut by cap=50, now included |
+  | A4 | ❌ | — | — | ❌ | — | Semantic distance |
+  | B1 | ✅ | 4 | ✅ | ✅ | MEDIUM | **BACK** — was cut by cap |
+  | B2 | ❌ | — | — | ❌ | — | Not in vector search |
+  | B3 | ✅ | 6 | ✅ | ✅ | OTHER | Stable |
+  | B4 | ✅ | 2.2 | ✅ | ✅ | **OTHER** | **NEW** — first time in final output! |
+  | B5 | ✅ | 8 | ✅ | ✅ | MEDIUM | Stable (rerank 8!) |
+  | B6 | ✅ | 1.7 | ❌ | ❌ | — | Below smart cutoff |
+  | C1 | ✅ | 3.1 | ✅ | ✅ | **OTHER** | **BACK** — was cut by cap |
+  | C2 | ❌ | — | — | ❌ | — | Not in vector search |
+  | C3 | ✅ | 3.4 | ✅ | ✅ | **OTHER** | **BACK** — was cut by cap |
+
+- **GT in final output**: **9/13** — best ever! (was 5/13 at cap=50)
+- **Hit rate**: 37% (7 HIGH + 21 MEDIUM out of 75)
+- **Key insight**: Cap was the #1 bottleneck for GT docs already in sources. Raising it from 50→75 recovered 4 more GT docs instantly.
+
+### Run 19: 2026-02-13 (BM25_BOOST_MAX 5 → 2, on top of R18)
+- **Hypothesis**: BM25 boost of 5 is too aggressive — keyword-matched noise docs outrank genuinely relevant GT docs. Reducing to 2 lets reranker quality dominate.
+- **Config changes**: `BM25_BOOST_MAX = 2` (was 5), `SUMMARIZE_DOCS_MAX = 75`
+- **Sources found**: 99, **Kept**: 70, **Summarized**: 70
+
+  | ID | In Sources | Rerank | Kept | Summ | Rel | Notes |
+  |----|-----------|--------|------|------|-----|-------|
+  | A1 | ✅ | 5 | ✅ | ✅ | HIGH | Stable |
+  | A2 | ✅ | 5 | ✅ | ✅ | HIGH | Stable |
+  | A3 | ✅ | 3.5 | ✅ | ✅ | HIGH | Stable from R18 |
+  | A4 | ❌ | — | — | ❌ | — | Semantic distance |
+  | B1 | ✅ | 4 | ✅ | ✅ | MEDIUM | Stable |
+  | B2 | ❌ | — | — | ❌ | — | Not in vector search |
+  | B3 | ✅ | 6 | ✅ | ✅ | OTHER | Stable |
+  | B4 | ✅ | 2.2 | ✅ | ✅ | OTHER | Stable from R18 |
+  | B5 | ✅ | 6 | ✅ | ✅ | MEDIUM | Stable |
+  | B6 | ✅ | 1.7 | ❌ | ❌ | — | Below smart cutoff |
+  | C1 | ✅ | 3.1 | ✅ | ✅ | OTHER | Stable |
+  | C2 | ❌ | — | — | ❌ | — | Not in vector search |
+  | C3 | ✅ | 3.4 | ✅ | ✅ | OTHER | Stable |
+
+- **GT in final output**: **9/13** (same as R18)
+- **Hit rate**: 41% (8 HIGH + 21 MEDIUM out of 70) — **improved from 37%**
+- **Key insight**: Reduced BM25 boost cut 5 noise docs (75→70 summaries) without losing any GT docs. Better signal-to-noise ratio.
+
+### Run 20: 2026-02-13 (SMART_CUTOFF_SCORE 2.0 → 1.0 — REVERTED)
+- **Hypothesis**: B6 (rerank 1.7) is the last GT doc in sources but below cutoff. Lowering to 1.0 should include it.
+- **Config changes**: `SMART_CUTOFF_SCORE = 1.0` (was 2.0), on top of R18+R19
+- **Sources found**: 106, **Kept**: 75, **Summarized**: 75
+- **GT in final output**: **8/13** (B5 dropped — LLM variance, B6 still ❌)
+- **Result**: Lower cutoff didn't help B6 because MAX cap of 75 was still hit (106 sources, 75 slots filled by docs scoring ≥1.0). B6 at effective 1.7 falls outside top 75 regardless.
+- **Decision**: **REVERTED** — no benefit, risks more noise.
+
+### Run 21: 2026-02-13 (IVFFlat probes 30 → 60 — REVERTED)
+- **Hypothesis**: Doubling probes searches 4% of clusters vs 2%, might find A4/B2 in neighboring clusters.
+- **Config changes**: `ivfflat.probes = 60` (was 30), on top of R18+R19
+- **Sources found**: 106, **Kept**: 75, **Summarized**: 75
+- **GT in final output**: **8/13** (B5 dropped — LLM variance, A4/B2 still ❌)
+- **Result**: probes=60 didn't help A4/B2. They are truly too semantically distant from all generated queries. Latency increased ~35s with no recall benefit.
+- **Decision**: **REVERTED** — no benefit, worse latency.
+
+### Tuning Summary (R18-R21)
+
+| Run | Change | GT Found | Hit Rate | Summaries | Verdict |
+|-----|--------|----------|----------|-----------|---------|
+| R17 (baseline) | 100% embeddings | 5/13 | 36% | 50 | Baseline |
+| **R18** | **cap 50→75** | **9/13** | **37%** | **75** | **MAJOR WIN** |
+| **R19** | **BM25 boost 5→2** | **9/13** | **41%** | **70** | **KEPT — better S/N** |
+| R20 | cutoff 2.0→1.0 | 8/13 | 40% | 75 | REVERTED |
+| R21 | probes 30→60 | 8/13 | 40% | 75 | REVERTED |
+
+**Final config** (R19): `SUMMARIZE_DOCS_MAX=75`, `BM25_BOOST_MAX=2`, `SMART_CUTOFF_SCORE=2.0`, `probes=30`
+
+### Remaining Unfound Docs
+
+| Doc | Why unfound | Possible fix |
+|-----|-------------|-------------|
+| A4 | Semantic distance — procedural appeal, 0 relevant keywords | "Related cases by party name" feature |
+| B2 | Semantic distance — asset freezing focus, not foreign law | Broader asset-freezing query facet |
+| B6 | In sources, rerank 1.7, below cutoff in top-75 competition | Would need cap>75 or better rerank score |
+| C2 | Never in vector search — domestic case, no foreign elements | Truly marginal relevance |

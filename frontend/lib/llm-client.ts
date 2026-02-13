@@ -448,7 +448,7 @@ const RERANK_MIN_SCORE_COHERE = 0.1; // 0-10 scale (= 0.01 native); Cohere score
 const RERANK_MAX_DOCS_IN = 180;      // max docs to send to reranker (9 searches × 30 docs)
 const RERANK_BATCH_SIZE = 20;        // score in batches of 20 to prevent attention degradation
 const SUMMARIZE_DOCS_MIN = 30;       // minimum docs to always keep (baseline)
-const SUMMARIZE_DOCS_MAX = 50;       // absolute max to prevent cost explosion
+const SUMMARIZE_DOCS_MAX = 75;       // absolute max to prevent cost explosion
 const SMART_CUTOFF_SCORE = 2.0;      // extend beyond min for docs scoring >= this
 const RERANK_HEAD_CHARS = 500;        // chars from document head (title, parties)
 const RERANK_DECISION_CHARS = 2000;   // chars from start of decision text / ΝΟΜΙΚΗ ΠΤΥΧΗ
@@ -731,7 +731,7 @@ ${docList}`;
 
   // Sort by effective score: reranker score + BM25 rank boost (inverse of rank)
   // BM25 boost ensures keyword-matched docs aren't buried by Cohere's text-similarity scoring
-  const BM25_BOOST_MAX = 5; // max boost on 0-10 scale for BM25 rank 1
+  const BM25_BOOST_MAX = 2; // max boost on 0-10 scale for BM25 rank 1
   function effectiveScore(s: { doc: SearchResult; rerankScore: number }): number {
     const bm25Rank = s.doc.bm25Rank;
     const boost = bm25Rank != null && bm25Rank <= BM25_FORCE_KEEP_RANK

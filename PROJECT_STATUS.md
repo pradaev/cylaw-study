@@ -90,17 +90,16 @@
 
 ## Last Session Log
 
-### 2026-02-13 (session 21 — Full embedding recovery + definitive A4 diagnosis)
-- **Batch 019** finally completed → downloaded 2.1GB, uploaded 50K chunks to pgvector.
-- **100% corpus coverage**: 2,071,079 chunks, 149,886 docs, 0 missing.
-- **REINDEX** IVFFlat (795s with 2GB maintenance_work_mem).
-- **A4 DEFINITIVELY PROVEN**: Has 41 chunks now but STILL not found by vector search → problem is **semantic distance**, not missing data.
-- **Run 17**: Full pipeline diagnostic with complete data. 5 GT docs in E2E (A1 HIGH, A2 MED, B1 MED, B3 OTHER, B5 OTHER). Hit rate 36%.
-- All experiments documented in `docs/SEARCH_QUALITY_EXPERIMENT.md`.
+### 2026-02-13 (session 22 — Cap + BM25 boost tuning, R18-R21)
+- **R18**: `SUMMARIZE_DOCS_MAX` 50→75 — **MAJOR WIN**: 9/13 GT docs (was 5/13). A3 HIGH, B4/C1/C3 OTHER.
+- **R19**: `BM25_BOOST_MAX` 5→2 — same 9/13, hit rate 37%→41%, 70 summaries. **KEPT**.
+- R20: `SMART_CUTOFF_SCORE` 2.0→1.0 — no improvement. **REVERTED**.
+- R21: `ivfflat.probes` 30→60 — no improvement, +35s latency. **REVERTED**.
+- **Final config**: cap=75, BM25 boost=2, cutoff=2.0, probes=30.
+- Remaining unfound: A4 (semantic distance), B2 (semantic distance), B6 (below cutoff), C2 (never found).
+
+### 2026-02-13 (session 21 — Full embedding recovery + A4 diagnosis)
+- Batch 019 → 100% coverage (2,071,079 chunks, 149,886 docs). A4 has 41 chunks but still not found → semantic distance proven.
 
 ### 2026-02-13 (session 20 — Missing embeddings recovery)
-- Downloaded + uploaded batches 017, 040. Created `scripts/upload_missing_chunks.py` for incremental uploads.
-- Test results (R14-R16): Core pipeline stable, hit rate 42-56%.
-
-### 2026-02-13 (session 19 — Search quality tuning: steps 1-4)
-- Smart cutoff, temp 0, A4 investigation, simplified route.ts. Best GT: 5 docs. Hit rate 34-54%.
+- Downloaded + uploaded batches 017, 040. Hit rate 42-56%.
