@@ -556,3 +556,81 @@ Three distinct failure modes:
   - B2 and B3 scored 6 and 5 on rerank but still didn't make top 30 — the cap is the bottleneck
   - A3 was kept in Run 8 but dropped here due to tighter competition
 - **Conclusion**: pgvector embeddings are a significant upgrade in recall. The 30-doc cap is now the limiting factor. Consider increasing cap or improving reranker to prioritize ground-truth-like docs.
+
+### Run 10: 2026-02-13 (pgvector 3072d→2000d via subvector, clean re-upload)
+- **Fixes applied**:
+  1. Attempted full 3072d upload — confirmed both HNSW and IVFFlat have 2000d limit in pgvector
+  2. Uploaded 1.92M chunks at full 3072d, truncated in-place via `subvector(embedding, 1, 2000)` (~3 min)
+  3. Rebuilt IVFFlat index (lists=1500, probes=30) — 12 min
+  4. Clean data state (no prior truncation artifacts)
+- **Searches**: 5 (1 raw query + 4 LLM-generated facet queries)
+- **Sources found**: 104
+- **After reranker (Cohere + GPT hybrid)**: 30 kept (threshold ≥0.1)
+- **After summarizer**: 5 HIGH, 11 MEDIUM, 2 NONE
+
+  | ID | In Sources | Rerank (hybrid) | Kept? | Summarized | Relevance | Notes |
+  |----|-----------|-----------------|-------|------------|-----------|-------|
+  | A1 | ✅ | 5 | ✅ | ✅ | **HIGH** | Stable |
+  | A2 | ✅ | 5 | ❌ | ❌ | — | Found but cut by 30-doc cap |
+  | A3 | ✅ | 3.5 | ❌ | ❌ | — | Found but cut by cap |
+  | A4 | ❌ | — | — | ❌ | — | Still not found (Court of Appeal path) |
+  | B1 | ✅ | 4 | ❌ | ❌ | — | Found + good rerank (4), but cap limited |
+  | B2 | ❌ | — | — | ❌ | — | Not found this run (LLM query variance) |
+  | B3 | ✅ | 6 | ❌ | ❌ | — | Found + high rerank (6), but cap limited |
+  | B4 | ✅ | 2.2 | ❌ | ❌ | — | Found in sources |
+  | B5 | ❌ | — | — | ❌ | — | Still not found |
+  | B6 | ✅ | 1.7 | ❌ | ❌ | — | Found in sources |
+  | C1 | ✅ | 3.1 | ❌ | ❌ | — | Found but cut by cap |
+  | C2 | ❌ | — | — | ❌ | — | Not found |
+  | C3 | ✅ | 3.4 | ❌ | ❌ | — | Found but cut by cap |
+
+- **Hit rate**: (5+11)/30 = **53%** (up from 43% in Run 9)
+- **Key observations**:
+  - **9/13 ground truth in sources** (B2 dropped vs Run 9 due to LLM query variance)
+  - **B3 scored 6 on rerank** — high quality doc consistently found by pgvector but always cut by 30-doc cap
+  - **Only 2 NONE** in 30 summarized docs (best noise ratio so far)
+  - **5 HIGH + 11 MEDIUM = 16/30** relevant = 53% hit rate
+  - More efficient: 198s total (vs 269s in Run 9)
+
+## 12. Comparative Summary: All Runs
+
+| Run | Date | Changes | Sources | In Sources (of 13 GT) | Kept | Summarized | HIGH | MED | NONE | Hit Rate | Time |
+|-----|------|---------|---------|----------------------|------|------------|------|-----|------|----------|------|
+| 1 | 02-10 | Baseline | ~70 | 11 | 12 | 12 | 2 | 0 | 10 | **17%** | 134s |
+| 2 | 02-10 | Batch reranker, sort by score | 57 | 11 | 30 | 30 | 5 | 1 | 24 | **20%** | 200s |
+| 3 | 02-12 | Summarizer prompt fix | 53 | 11 | 27 | 27 | 2 | 1 | — | **15%** | 198s |
+| 4 | 02-12 | Cohere rerank (replaces GPT) | 50 | 9 | 30 | 30 | 2 | 0 | — | **7%** | 90s |
+| 5 | 02-12 | Hybrid Cohere + GPT reranker | 74 | 10 | 30 | 30 | 4 | 6 | 6 | **33%** | 610s |
+| 6 | 02-12 | Summarizer temp 0 | 71 | 6 | 30 | 30 | 5 | 4 | 7 | **30%** | — |
+| 7 | 02-12 | Greek stemming BM25 | — | 3 | — | — | 2 | — | — | **33%** | — |
+| 8 | 02-12 | Multi-query 3-8 + raw query | 121 | 6 | 30 | 30 | 9 | 11 | 0 | **67%** | — |
+| 9 | 02-12 | pgvector text-emb-3-large 2000d | 133 | 10 | 30 | 30 | 4 | 9 | 10 | **43%** | 269s |
+| **10** | **02-13** | **Clean re-upload, subvector** | **104** | **9** | **30** | **30** | **5** | **11** | **2** | **53%** | **198s** |
+
+### Key Trends
+
+1. **Hit rate progression**: 17% → 20% → 15% → 7% → 33% → 30% → 33% → **67%** → 43% → **53%**
+2. **Best hit rate**: Run 8 (67%) — multi-query expansion was the biggest single improvement
+3. **Best recall**: Run 9 (10/13 ground truth in sources) — pgvector embeddings dramatically improved recall
+4. **Best noise ratio**: Run 10 (only 2 NONE in 30 docs) — clean data + good embeddings
+5. **Persistent failures**: A4 (Court of Appeal) and B5 never found by any search method
+6. **30-doc cap is the bottleneck**: B3 scores 5-6 on rerank every time but can't make top 30
+7. **LLM query variance**: B-docs appear/disappear between runs due to non-deterministic query generation
+
+### Ground Truth Document Tracking Across All Runs
+
+| Doc | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10 |
+|-----|----|----|----|----|----|----|----|----|----|----|
+| A1 | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH |
+| A2 | HIGH | HIGH | MED | HIGH | HIGH | HIGH | ❌ | HIGH | HIGH | ❌(src) |
+| A3 | ❌(rr) | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | HIGH | ❌(cap) | ❌(cap) |
+| A4 | ❌(vs) | ❌(vs) | ❌(rr) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| B1 | NONE | NONE | ❌(rr) | ❌(rr) | ❌(cap) | ❌ | ❌ | ❌ | ❌(src) | ❌(cap) |
+| B2 | NONE | NONE | HIGH | ❌(rr) | MED | ❌ | ❌ | ❌ | ❌(src) | ❌ |
+| B3 | ❌(rr) | NONE | ❌(rr) | LOW | ❌(cap) | ❌ | ❌ | ❌ | ❌(cap) | ❌(cap) |
+| B4 | NONE | MED | LOW | LOW | ❌(rr) | OTHER | ❌ | ❌ | ❌(src) | ❌(src) |
+| B5 | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌(vs) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| B6 | NONE | NONE | LOW | LOW | ❌(rr) | ❌ | ❌ | ❌ | ❌(src) | ❌(src) |
+| C1 | NONE | NONE | LOW | LOW | OTHER | OTHER | OTHER | ❌(cap) | ❌(cap) | ❌(cap) |
+
+Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut by 30-doc cap, ❌(src)=in sources but not kept, ❌=not found
