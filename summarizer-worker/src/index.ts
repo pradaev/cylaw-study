@@ -15,9 +15,31 @@ interface Env {
   DOCS_BUCKET: R2Bucket;
 }
 
+interface StructuredSummary {
+  caseHeader: {
+    parties: string;
+    court: string;
+    date: string;
+    caseNumber: string;
+  };
+  status: string;
+  facts: string;
+  coreIssue: string;
+  findings: {
+    engagement: "RULED" | "DISCUSSED" | "MENTIONED" | "NOT_ADDRESSED";
+    analysis: string;
+    quote: string;
+  };
+  outcome: string;
+  relevance: {
+    rating: "HIGH" | "MEDIUM" | "LOW" | "NONE";
+    reasoning: string;
+  };
+}
+
 interface SummaryResult {
   docId: string;
-  summary: string;
+  summary: StructuredSummary;
   relevance: string;
   courtLevel: string;
   court: string;
@@ -37,6 +59,57 @@ interface RequestBody {
 
 const SUMMARIZER_MODEL = "gpt-4o";
 const SUMMARIZER_MAX_TOKENS = 1500;
+
+// ── JSON Schema for structured output ──────────────────
+
+const SUMMARY_JSON_SCHEMA = {
+  name: "case_summary",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: {
+      caseHeader: {
+        type: "object",
+        properties: {
+          parties: { type: "string", description: "Plaintiff v Defendant (Greek)" },
+          court: { type: "string", description: "Court name in Greek" },
+          date: { type: "string", description: "Decision date" },
+          caseNumber: { type: "string", description: "Case number" },
+        },
+        required: ["parties", "court", "date", "caseNumber"],
+        additionalProperties: false,
+      },
+      status: { type: "string", description: "ΑΠΟΦΑΣΗ or ΕΝΔΙΑΜΕΣΗ ΑΠΟΦΑΣΗ" },
+      facts: { type: "string", description: "Brief background in 2-3 sentences (Greek)" },
+      coreIssue: { type: "string", description: "Core legal issue in 1-2 sentences (Greek)" },
+      findings: {
+        type: "object",
+        properties: {
+          engagement: {
+            type: "string",
+            enum: ["RULED", "DISCUSSED", "MENTIONED", "NOT_ADDRESSED"],
+          },
+          analysis: { type: "string" },
+          quote: { type: "string" },
+        },
+        required: ["engagement", "analysis", "quote"],
+        additionalProperties: false,
+      },
+      outcome: { type: "string", description: "What the court ordered (Greek)" },
+      relevance: {
+        type: "object",
+        properties: {
+          rating: { type: "string", enum: ["HIGH", "MEDIUM", "LOW", "NONE"] },
+          reasoning: { type: "string" },
+        },
+        required: ["rating", "reasoning"],
+        additionalProperties: false,
+      },
+    },
+    required: ["caseHeader", "status", "facts", "coreIssue", "findings", "outcome", "relevance"],
+    additionalProperties: false,
+  },
+} as const;
 
 // ── Helpers ────────────────────────────────────────────
 
@@ -75,12 +148,22 @@ function extractDecisionText(text: string, maxChars: number): string {
     decisionText.slice(-tailSize);
 }
 
-function parseRelevance(summary: string): string {
-  const section = summary.split(/RELEVANCE RATING/i)[1] ?? "";
-  for (const level of ["HIGH", "MEDIUM", "LOW", "NONE"]) {
-    if (new RegExp(`\\b${level}\\b`).test(section)) return level;
+/**
+ * Post-process: enforce consistency rules.
+ * - NOT_ADDRESSED + rating > LOW → downgrade to LOW
+ * - MENTIONED + rating = HIGH → cap at MEDIUM
+ */
+function enforceRelevanceRules(summary: StructuredSummary): StructuredSummary {
+  const { engagement } = summary.findings;
+  const { rating } = summary.relevance;
+
+  if (engagement === "NOT_ADDRESSED" && (rating === "HIGH" || rating === "MEDIUM")) {
+    return { ...summary, relevance: { ...summary.relevance, rating: "LOW" } };
   }
-  return "NONE";
+  if (engagement === "MENTIONED" && rating === "HIGH") {
+    return { ...summary, relevance: { ...summary.relevance, rating: "MEDIUM" } };
+  }
+  return summary;
 }
 
 function getCourtLevel(court: string): string {
@@ -101,6 +184,65 @@ function extractYearFromDocId(docId: string): number {
   return match ? parseInt(match[1], 10) : 0;
 }
 
+/**
+ * Strip noise from user query for summarizer focus.
+ * Removes temporal constraints, court type mentions, action prefixes, quantity markers.
+ * Falls back to original if result is too short.
+ */
+function distillSummarizerFocus(query: string): string {
+  let text = query.trim();
+
+  // 1. Temporal constraints
+  const temporalPatterns = [
+    /κατά τη[νη]?\s+τελευταί[αη]\s+(?:πενταετία|δεκαετία|τριετία|διετία)/gi,
+    /τ(?:α|ης|ων)\s+τελευταί(?:α|ες|ων|ων)\s+\d+\s+(?:χρόνι[αω]|ετ[ηών]|μήν(?:ες|ών))/gi,
+    /(?:μετά|από|πριν)\s+(?:το|τ[ηο]ν?)\s+(?:έτος\s+)?\d{4}/gi,
+    /(?:μεταξύ|από)\s+\d{4}\s+(?:και|έως|μέχρι|ως)\s+\d{4}/gi,
+    /πρόσφατ(?:ες|α|ων|η)\s*/gi,
+    /τ(?:ης|ων)\s+τελευταί(?:ας|ων)\s+(?:πενταετίας|δεκαετίας|τριετίας|διετίας|περιόδου)/gi,
+  ];
+  for (const pat of temporalPatterns) {
+    text = text.replace(pat, " ");
+  }
+
+  // 2. Court type mentions
+  const courtPatterns = [
+    /(?:στ[οα]|του|τ(?:ης|ων)|ενώπιον(?:\s+του)?|από\s+τ[οα])\s+(?:Ανώτατ[οα]|Ανωτάτου)\s+(?:Συνταγματικ[οό](?:ύ)?\s+)?Δικαστήρι[οα](?:ύ)?/gi,
+    /(?:στ[οα]|του|τ(?:ης|ων)|ενώπιον(?:\s+του)?|από\s+τ[οα])\s+Εφετεί[οα](?:ύ)?/gi,
+    /(?:σε|στ[αο]|τ(?:ων|α))\s+(?:πρωτ[οό]δικ[αο]|Επαρχιακ[αάό])\s+[Δδ]ικαστήρι[αο](?:ύ)?/gi,
+    /(?:στ[οα]|του|τ(?:ης|ων))\s+[Δδ]ιοικητικ[οό](?:ύ)?\s+[Δδ]ικαστήρι[οα](?:ύ)?/gi,
+    /(?:στ[οα]|του|τ(?:ης|ων))\s+Οικογενειακ[οό](?:ύ)?\s+[Δδ]ικαστήρι[οα](?:ύ)?/gi,
+  ];
+  for (const pat of courtPatterns) {
+    text = text.replace(pat, " ");
+  }
+
+  // 3. Action/instruction prefixes
+  const actionPatterns = [
+    /^(?:Βρες|Αναζήτησε|Ψάξε|Δείξε|Εντόπισε)(?:\s+μου)?\s+(?:αποφάσεις|υποθέσεις|δικαστικές\s+αποφάσεις)?\s*(?:σχετικ[άέ]\s+(?:με|με\s+τ[οηα]ν?))?\s*/gi,
+    /^(?:Θέλω|Χρειάζομαι)\s+(?:να\s+(?:βρω|δω|αναζητήσω))?\s*(?:αποφάσεις|υποθέσεις)?\s*(?:σχετικ[άέ]\s+(?:με|με\s+τ[οηα]ν?))?\s*/gi,
+    /^(?:Ποιες|Ποια)\s+(?:αποφάσεις|υποθέσεις)\s+(?:αφορούν|σχετίζονται\s+με)\s*/gi,
+  ];
+  for (const pat of actionPatterns) {
+    text = text.replace(pat, "");
+  }
+
+  // 4. Quantity markers
+  const quantityPatterns = [
+    /τ(?:ις|α|ους?)\s+\d+\s+(?:πιο|πλέον)\s+(?:σημαντικ[έά]ς?|σχετικ[έά]ς?)\s*/gi,
+    /τ(?:α|ις)\s+(?:πρώτ[αες]|κύρι[αες])\s+\d+\s*/gi,
+  ];
+  for (const pat of quantityPatterns) {
+    text = text.replace(pat, " ");
+  }
+
+  text = text.replace(/\s+/g, " ").trim();
+  text = text.replace(/^[,;:\s]+|[,;:\s]+$/g, "").trim();
+
+  if (text.length < 15) return query.trim();
+  return text;
+}
+
 // ── Summarize a single document ────────────────────────
 
 async function summarizeDocument(
@@ -119,48 +261,39 @@ async function summarizeDocument(
 The lawyer's research question: "${userQuery}"
 Analysis focus: "${focus}"
 
-Summarize this court decision in 400-700 words:
+Return a structured JSON summary of this court decision. All text fields must be in Greek.
 
-1. CASE HEADER: Parties, court, date, case number (2 lines max)
-2. STATUS: Final decision (ΑΠΟΦΑΣΗ) or interim (ΕΝΔΙΑΜΕΣΗ ΑΠΟΦΑΣΗ)?
-3. FACTS: Brief background — what happened, who sued whom, what was claimed (3-4 sentences)
-4. WHAT THE CASE IS ACTUALLY ABOUT: In 1-2 sentences, state the core legal issue the court decided. This may differ from the research question.
-5. COURT'S FINDINGS on "${focus}":
-   Pick ONE engagement level:
-   - RULED: The court analyzed the topic and reached a conclusion or ruling.
-   - DISCUSSED: The court substantively engaged with the topic but did NOT reach a conclusion.
-   - MENTIONED: The topic was only briefly referenced without substantive analysis.
-   - NOT ADDRESSED: The topic does not appear in the decision.
-   State the level, then:
-   - If RULED: Quote the court's conclusion in Greek.
-   - If DISCUSSED: Describe what the court analyzed. Quote the most relevant passage in Greek.
-   - If MENTIONED: Note the reference briefly.
-   - If NOT ADDRESSED: Write "NOT ADDRESSED."
-6. OUTCOME: What did the court order?
-7. RELEVANCE RATING — rate based on RESEARCH VALUE to the lawyer, NOT on engagement level above:
-   The engagement level (section 5) describes HOW the court addressed the topic.
-   The relevance rating describes WHETHER THIS CASE IS USEFUL for the lawyer's research — these are DIFFERENT things.
-   A case can be NOT ADDRESSED on the exact topic but still MEDIUM/HIGH relevance if the facts, parties, or legal context overlap significantly.
+FIELD GUIDELINES:
 
-   Rate as HIGH / MEDIUM / LOW / NONE:
-   - HIGH: A lawyer researching this topic MUST read this case. The court analyzed the specific legal issue, or the case involves nearly identical facts/parties/legal questions.
-   - MEDIUM: A lawyer would BENEFIT from reading this case. It shares key factual or legal elements: same type of dispute, similar parties (e.g., foreign nationals), overlapping legal area, or cross-border elements — even if the court's main focus was different.
-   - LOW: Tangentially related. Same broad area of law but different context.
-   - NONE: No connection to the research question whatsoever — completely different area of law, different type of dispute, no overlapping facts.
+- **caseHeader**: Extract parties, court, date, case number from the document header.
+- **status**: "ΑΠΟΦΑΣΗ" for final decisions, "ΕΝΔΙΑΜΕΣΗ ΑΠΟΦΑΣΗ" for interim.
+- **facts**: Brief background in 2-3 sentences — who sued whom, what was claimed.
+- **coreIssue**: The core legal issue the court actually decided (may differ from the research question).
+- **findings.engagement**: How deeply the court addressed "${focus}":
+  - RULED: Court analyzed the topic and reached a conclusion.
+  - DISCUSSED: Court substantively engaged but didn't conclude.
+  - MENTIONED: Topic briefly referenced without analysis.
+  - NOT_ADDRESSED: Topic does not appear in the decision.
+- **findings.analysis**: If RULED/DISCUSSED — describe what the court analyzed. If MENTIONED — brief note. If NOT_ADDRESSED — empty string.
+- **findings.quote**: Exact quote from the decision (Greek). Empty string if NOT_ADDRESSED.
+- **outcome**: What the court ordered.
+- **relevance.rating**: Research value for the lawyer:
+  - HIGH: Lawyer MUST read this — court analyzed the exact issue or nearly identical facts.
+  - MEDIUM: Lawyer would benefit — shares key legal elements, similar dispute type, cross-border elements.
+  - LOW: Tangentially related — same broad area but different context.
+  - NONE: No connection — completely different area of law.
+- **relevance.reasoning**: 1-2 sentences explaining the rating.
 
-   MANDATORY OVERRIDES (apply BEFORE deciding your rating):
-   - If the research question involves FOREIGN LAW and this case has foreign parties, cross-border assets, or references to non-Cypriot legal systems → rate at least MEDIUM, even if the court did not explicitly analyze foreign law as a topic.
-   - A purely domestic case (Cypriot parties, Cypriot assets, no foreign element) is LOW even if it involves the same area of law.
-   - Only rate NONE if the case is about a COMPLETELY DIFFERENT area of law (e.g., immigration, criminal, labor when the question is about family property).
+MANDATORY OVERRIDES:
+- Foreign-law research + foreign parties/cross-border assets → at least MEDIUM.
+- Purely domestic case (no foreign element) → at most LOW.
+- Completely different area of law → NONE.
 
 CRITICAL RULES:
 - ONLY state what is EXPLICITLY written in the text.
-- NEVER assume or infer a court's conclusion.
-- Distinguish between what a PARTY ARGUED and what the COURT DECIDED.
-- Include at least one EXACT QUOTE from the decision (in Greek).
-- A wrong summary is worse than no summary.
-
-Document ID: ${docId}`;
+- NEVER assume or infer conclusions.
+- Distinguish party arguments from court decisions.
+- A wrong summary is worse than no summary.`;
 
   const response = await client.chat.completions.create({
     model: SUMMARIZER_MODEL,
@@ -170,14 +303,35 @@ Document ID: ${docId}`;
     ],
     temperature: 0,
     max_tokens: SUMMARIZER_MAX_TOKENS,
+    response_format: {
+      type: "json_schema",
+      json_schema: SUMMARY_JSON_SCHEMA,
+    },
   });
 
-  const summary = response.choices[0]?.message?.content ?? "[Summary unavailable]";
+  const raw = response.choices[0]?.message?.content ?? "{}";
+  let summary: StructuredSummary;
+  try {
+    summary = JSON.parse(raw) as StructuredSummary;
+  } catch {
+    summary = {
+      caseHeader: { parties: "", court: "", date: "", caseNumber: "" },
+      status: "",
+      facts: "",
+      coreIssue: "",
+      findings: { engagement: "NOT_ADDRESSED", analysis: "", quote: "" },
+      outcome: "",
+      relevance: { rating: "NONE", reasoning: "Failed to parse summary" },
+    };
+  }
+
+  // Enforce consistency: NOT_ADDRESSED → max LOW
+  summary = enforceRelevanceRules(summary);
 
   return {
     docId,
     summary,
-    relevance: parseRelevance(summary),
+    relevance: summary.relevance.rating,
     courtLevel: getCourtLevel(court),
     court,
     year: extractYearFromDocId(docId),
@@ -205,6 +359,9 @@ export default {
       const client = new OpenAI({ apiKey: openaiApiKey });
       const results: SummaryResult[] = [];
 
+      // Distill focus for summarizer (strip temporal/court noise)
+      const distilledFocus = distillSummarizerFocus(focus);
+
       // Process all docs in this batch with concurrency=5
       // Each Service Binding call gets its own 6-connection pool
       const CONCURRENCY = 5;
@@ -219,7 +376,7 @@ export default {
                 return null;
               }
               const fullText = await object.text();
-              return summarizeDocument(client, docId, fullText, focus, userQuery);
+              return summarizeDocument(client, docId, fullText, distilledFocus, userQuery);
             } catch (docErr) {
               const msg = docErr instanceof Error ? docErr.message : String(docErr);
               console.error(JSON.stringify({ event: "summarizer_error", docId, error: msg }));

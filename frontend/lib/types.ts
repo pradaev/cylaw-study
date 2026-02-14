@@ -25,9 +25,32 @@ export interface SearchingData {
   step: number;
 }
 
+/** Structured summary produced by the summarizer (JSON Schema output). */
+export interface StructuredSummary {
+  caseHeader: {
+    parties: string;
+    court: string;
+    date: string;
+    caseNumber: string;
+  };
+  status: string;
+  facts: string;
+  coreIssue: string;
+  findings: {
+    engagement: "RULED" | "DISCUSSED" | "MENTIONED" | "NOT_ADDRESSED";
+    analysis: string;
+    quote: string;
+  };
+  outcome: string;
+  relevance: {
+    rating: "HIGH" | "MEDIUM" | "LOW" | "NONE";
+    reasoning: string;
+  };
+}
+
 export interface SummaryEntry {
   docId: string;
-  summary: string;
+  summary: StructuredSummary;
 }
 
 export interface ActivityEntry {

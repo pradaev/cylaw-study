@@ -1009,6 +1009,49 @@ Legend: ❌(vs)=not in vector search, ❌(rr)=dropped by reranker, ❌(cap)=cut 
 
 **Final config** (R19): `SUMMARIZE_DOCS_MAX=75`, `BM25_BOOST_MAX=2`, `SMART_CUTOFF_SCORE=2.0`, `probes=30`
 
+### Run 22: 2026-02-13 (Few-shot judicial phrases in prompt — REVERTED)
+- **Hypothesis**: Adding 10 real sentence fragments from Cypriot court decisions as few-shot examples will teach the LLM to generate queries in judicial style instead of keyword stacks.
+- **Config changes**: Replaced GOOD/BAD examples + QUERY STRATEGY with real judge phrases + judicial-style facets
+- **Sources found**: 159, **Kept**: 75, **Summarized**: 75
+- **GT in final output**: **5/13** (A1, A2, A3, C3 + B6 in sources but not kept)
+- **Result**: Total sources increased 99→159 but B-category docs disappeared. The few-shot examples were biased toward A-category patterns (foreign law, EU regulation). The LLM over-fit to those examples and stopped generating broader queries that found B1, B3, B5, B4 in previous runs.
+- **Decision**: **REVERTED** — severe regression from 9/13 to 5/13.
+
+### Run 23: 2026-02-13 (Dual query: keyword + bm25_phrase — REVERTED)
+- **Hypothesis**: Add a `bm25_phrase` required parameter to search_cases. LLM generates keyword query for vector search + judicial phrase for BM25. Each backend gets its optimal query style.
+- **Config changes**: Added `bm25_phrase` to tool definition, dual BM25 search in hybrid fn, merged BM25 results via best-rank dedup
+- **Sources found**: 84, **Kept**: 71, **Summarized**: 71
+- **GT in final output**: **8/13** (same docs as R19 minus B4; B6 still in sources at 1.7 but not kept)
+- **Result**: Negligible change from baseline. Fewer total sources (84 vs 99), lower hit rate (31% vs 41%). The additional BM25 query didn't surface new GT docs. Complexity increase for no benefit.
+- **Decision**: **REVERTED** — no improvement, more noise, more complexity.
+
+### Query Style Tuning Summary (R22-R23)
+
+| Run | Change | GT Found | Hit Rate | Summaries | Verdict |
+|-----|--------|----------|----------|-----------|---------|
+| R19 (baseline) | Final config | 9/13 | 41% | 70 | Baseline |
+| R22 | Few-shot judge phrases | 5/13 | 45% | 75 | REVERTED — lost B-docs |
+| R23 | Dual keyword+phrase | 8/13 | 31% | 71 | REVERTED — no benefit |
+| R24 | Summarizer focus distillation | 9/13 | 34% | 68 | **KEPT** — more accurate ratings |
+
+**Key finding**: The current keyword-style query generation (short noun phrases) works better than judicial-style sentences for this RAG pipeline. Keyword queries provide better semantic matching for vector search AND are broad enough for BM25. Changing query style to match judicial writing caused regression because:
+1. Judicial phrases are too specific — they narrow the search space
+2. Few-shot examples from one topic bias the LLM toward that topic's vocabulary
+3. Vector search (the primary recall mechanism) works best with concise keyword combinations
+
+### Run 24: 2026-02-13 (Summarizer focus distillation — KEPT)
+- **Hypothesis**: Raw user query contains noise irrelevant for content evaluation: temporal constraints ("κατά την τελευταία πενταετία"), court type mentions (already in `court_level` filter), action prefixes ("Βρες μου αποφάσεις..."). Stripping these from the summarizer's `focus` parameter should produce more accurate relevance ratings.
+- **Config changes**: Added `distillSummarizerFocus()` — deterministic regex-based function that strips temporal, court-type, action prefix, and quantity noise. Applied to `summarizerFocus` (not `userQuery` — raw query still shown as research question context).
+- **Distillation example**: "...διαδικασιών διαζυγίου κατά την τελευταία πενταετία" → "...διαδικασιών διαζυγίου"
+- **Sources found**: same pipeline, **Kept**: 68, **Summarized**: 68
+- **GT in final output**: **9/13** — same ground-truth set found as R19 baseline
+- **Relevance distribution**: 10 HIGH, 13 MEDIUM, 35 LOW, 10 NONE
+- **Hit rate**: 34% (was 41%)
+- **Key change**: NONE dropped from ~41 to 10. LOW increased from unknown to 35. Summarizer now correctly differentiates "tangentially related" (LOW) from "no connection" (NONE) — previously many LOW-worthy docs were blanket-rated NONE.
+- **GT rating shifts**: A2 HIGH→MEDIUM (asset freezing, not specifically foreign law application — arguably more accurate), B5 HIGH→MEDIUM (same pattern), B3 rated LOW (MENTIONED engagement, cap applied).
+- **Decision**: **KEPT** — more accurate relevance distribution. The hit rate drop is because the summarizer is stricter about HIGH/MEDIUM, but the quality of ratings is better. UI already filters LOW/NONE, so users see only genuinely relevant results.
+- **Also fixed**: Test script `pipeline_stage_test.mjs` updated to handle structured `StructuredSummary` objects (was broken since R23's structured summarizer change — parsing `s.summary` as string vs object).
+
 ### Remaining Unfound Docs
 
 | Doc | Why unfound | Possible fix |

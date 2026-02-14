@@ -1,56 +1,13 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { marked } from "marked";
-import type { SearchResult } from "@/lib/types";
+import type { SearchResult, StructuredSummary } from "@/lib/types";
 import { COURT_NAMES } from "@/lib/types";
 
 interface SourceCardProps {
   source: SearchResult;
-  summary?: string;
+  summary?: StructuredSummary;
   onClick: (docId: string) => void;
-}
-
-/**
- * Parse relevance level from summary text.
- */
-function parseRelevance(summary: string): string | null {
-  const section = summary.split(/RELEVANCE RATING/i)[1] ?? "";
-  for (const level of ["HIGH", "MEDIUM", "LOW", "NONE"]) {
-    if (new RegExp(`\\b${level}\\b`).test(section)) return level;
-  }
-  return null;
-}
-
-/**
- * Extract Court Findings (ΕΥΡΗΜΑΤΑ ΔΙΚΑΣΤΗΡΙΟΥ) from summary — section 5.
- */
-function extractFindings(summary: string): string {
-  const lines = summary.split("\n");
-  const contentLines: string[] = [];
-  let inFindings = false;
-
-  for (const line of lines) {
-    // Start capturing at section 5 (ΕΥΡΗΜΑΤΑ / COURT'S FINDINGS)
-    if (/^5\.|ΕΥΡΗΜΑΤΑ|COURT'S FINDINGS/i.test(line.trim())) {
-      inFindings = true;
-      // Clean the header itself
-      const cleaned = line.replace(/^5\.\s*(ΕΥΡΗΜΑΤΑ ΔΙΚΑΣΤΗΡΙΟΥ|COURT'S FINDINGS)[^:]*:\s*/i, "").trim();
-      if (cleaned.length > 10) contentLines.push(cleaned);
-      continue;
-    }
-    // Stop at section 6 or 7
-    if (inFindings && /^[6-7]\.|ΑΠΟΤΕΛΕΣΜΑ|OUTCOME|RELEVANCE RATING/i.test(line.trim())) {
-      break;
-    }
-    if (inFindings) {
-      const trimmed = line.trim();
-      if (trimmed.length > 0) contentLines.push(trimmed);
-    }
-  }
-
-  const text = contentLines.join(" ").slice(0, 400);
-  return text.length > 0 ? text + (text.length >= 400 ? "..." : "") : "";
 }
 
 const RELEVANCE_STYLES: Record<string, string> = {
@@ -65,21 +22,35 @@ const RELEVANCE_LABELS: Record<string, string> = {
   LOW: "Χαμηλή",
 };
 
+const ENGAGEMENT_LABELS: Record<string, string> = {
+  RULED: "ΑΠΟΦΑΝΘΗΚΕ",
+  DISCUSSED: "ΑΝΑΛΥΘΗΚΕ",
+  MENTIONED: "ΑΝΑΦΕΡΘΗΚΕ",
+  NOT_ADDRESSED: "ΔΕΝ ΕΞΕΤΑΣΤΗΚΕ",
+};
+
+const ENGAGEMENT_STYLES: Record<string, string> = {
+  RULED: "text-emerald-600",
+  DISCUSSED: "text-blue-600",
+  MENTIONED: "text-gray-500",
+  NOT_ADDRESSED: "text-gray-400",
+};
+
 export function SourceCard({ source, summary, onClick }: SourceCardProps) {
   const [expanded, setExpanded] = useState(false);
   const courtLabel = COURT_NAMES[source.court] ?? source.court;
-  const relevance = summary ? parseRelevance(summary) : null;
-  const findings = summary ? extractFindings(summary) : "";
   const isReady = !!summary;
 
-  const summaryHtml = useMemo(() => {
-    if (!summary) return "";
-    return marked.parse(summary, { async: false }) as string;
-  }, [summary]);
+  const relevance = summary?.relevance.rating ?? null;
+  const relevanceStyle = relevance ? RELEVANCE_STYLES[relevance] ?? "" : "";
 
-  const relevanceStyle = relevance
-    ? RELEVANCE_STYLES[relevance] ?? ""
-    : "";
+  // Build findings preview — shown in collapsed state
+  const findingsPreview = useMemo(() => {
+    if (!summary) return "";
+    const { engagement, analysis } = summary.findings;
+    if (engagement === "NOT_ADDRESSED") return "";
+    return analysis.slice(0, 300) + (analysis.length > 300 ? "..." : "");
+  }, [summary]);
 
   return (
     <div className={`bg-white border rounded-xl overflow-hidden transition-all ${
@@ -111,7 +82,7 @@ export function SourceCard({ source, summary, onClick }: SourceCardProps) {
           </div>
         )}
 
-        {/* Title + court info + findings */}
+        {/* Title + court info + findings preview */}
         <div className="flex-1 min-w-0">
           {isReady ? (
             <button
@@ -132,11 +103,19 @@ export function SourceCard({ source, summary, onClick }: SourceCardProps) {
             <span>{courtLabel}</span>
             <span>&middot;</span>
             <span>{source.year}</span>
+            {summary && (
+              <>
+                <span>&middot;</span>
+                <span className={ENGAGEMENT_STYLES[summary.findings.engagement] ?? ""}>
+                  {ENGAGEMENT_LABELS[summary.findings.engagement] ?? summary.findings.engagement}
+                </span>
+              </>
+            )}
           </div>
-          {/* Court findings — always visible */}
-          {findings && (
+          {/* Findings preview — always visible (collapsed) */}
+          {findingsPreview && (
             <p className="text-[13px] text-gray-600 mt-1.5 leading-relaxed">
-              {findings}
+              {findingsPreview}
             </p>
           )}
         </div>
@@ -158,21 +137,52 @@ export function SourceCard({ source, summary, onClick }: SourceCardProps) {
 
       {/* Full summary — expanded */}
       {expanded && summary && (
-        <div className="border-t border-gray-200 px-4 py-3 bg-gray-50">
-          <div
-            className="prose prose-sm max-w-none text-gray-600 leading-relaxed
-              [&_strong]:text-gray-900
-              [&_h1]:text-sm [&_h1]:font-bold [&_h1]:text-gray-900 [&_h1]:mt-0 [&_h1]:mb-2
-              [&_h2]:text-sm [&_h2]:font-bold [&_h2]:text-gray-900 [&_h2]:mt-3 [&_h2]:mb-1
-              [&_p]:my-1.5 [&_p]:text-[13px]
-              [&_ol]:my-1 [&_ol]:text-[13px]
-              [&_li]:my-0.5"
-            dangerouslySetInnerHTML={{ __html: summaryHtml }}
-          />
+        <div className="border-t border-gray-200 px-4 py-3 bg-gray-50 space-y-3">
+          {/* Core issue */}
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-gray-400 mb-0.5">Κύριο νομικό ζήτημα</div>
+            <p className="text-[13px] text-gray-700 leading-relaxed">{summary.coreIssue}</p>
+          </div>
+
+          {/* Facts */}
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-gray-400 mb-0.5">Ιστορικό</div>
+            <p className="text-[13px] text-gray-600 leading-relaxed">{summary.facts}</p>
+          </div>
+
+          {/* Court findings */}
+          {summary.findings.engagement !== "NOT_ADDRESSED" && (
+            <div>
+              <div className="text-[11px] uppercase tracking-wider text-gray-400 mb-0.5">
+                Ευρήματα δικαστηρίου
+                <span className={`ml-1.5 ${ENGAGEMENT_STYLES[summary.findings.engagement]}`}>
+                  [{ENGAGEMENT_LABELS[summary.findings.engagement]}]
+                </span>
+              </div>
+              <p className="text-[13px] text-gray-700 leading-relaxed">{summary.findings.analysis}</p>
+              {summary.findings.quote && (
+                <blockquote className="mt-1.5 pl-3 border-l-2 border-indigo-300 text-[13px] text-gray-600 italic leading-relaxed">
+                  «{summary.findings.quote}»
+                </blockquote>
+              )}
+            </div>
+          )}
+
+          {/* Outcome */}
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-gray-400 mb-0.5">Αποτέλεσμα</div>
+            <p className="text-[13px] text-gray-600 leading-relaxed">{summary.outcome}</p>
+          </div>
+
+          {/* Relevance reasoning */}
+          <div className="pt-1 border-t border-gray-200">
+            <p className="text-[12px] text-gray-500 italic">{summary.relevance.reasoning}</p>
+          </div>
+
           <button
             type="button"
             onClick={() => onClick(source.doc_id)}
-            className="mt-2 text-xs text-indigo-600 hover:text-indigo-500 transition-colors cursor-pointer"
+            className="text-xs text-indigo-600 hover:text-indigo-500 transition-colors cursor-pointer"
           >
             Δείτε πλήρες κείμενο &rarr;
           </button>
@@ -184,7 +194,7 @@ export function SourceCard({ source, summary, onClick }: SourceCardProps) {
 
 interface SourceListProps {
   sources: SearchResult[];
-  summaryCache?: Record<string, string>;
+  summaryCache?: Record<string, StructuredSummary>;
   summarizeTotal?: number | null;
   onSourceClick: (docId: string) => void;
 }
@@ -195,26 +205,25 @@ export function SourceList({ sources, summaryCache, summarizeTotal, onSourceClic
   const summarizedCount = summaryCache
     ? sources.filter((s) => summaryCache[s.doc_id]).length
     : 0;
-  // After reranking, only a subset of sources is sent to the summarizer.
-  // Use summarizeTotal (from the reranked SSE event) as the denominator.
   const expectedTotal = summarizeTotal ?? sources.length;
   const allDone = expectedTotal > 0 && summarizedCount >= expectedTotal;
 
-  // Only show cards after ALL summaries are ready — filter NONE, sort by relevance
+  // Only show cards after ALL summaries are ready — filter NONE + LOW, sort by relevance
   const displayList = useMemo(() => {
     if (!allDone) return [];
     return [...sources]
       .filter((s) => {
         const summary = summaryCache?.[s.doc_id];
         if (!summary) return false;
-        const rel = parseRelevance(summary);
-        return rel !== "NONE" && rel !== null;
+        const rel = summary.relevance.rating;
+        // Filter out NONE and LOW — keep only HIGH and MEDIUM
+        return rel === "HIGH" || rel === "MEDIUM";
       })
       .sort((a, b) => {
         const sumA = summaryCache?.[a.doc_id];
         const sumB = summaryCache?.[b.doc_id];
-        const relA = sumA ? parseRelevance(sumA) : null;
-        const relB = sumB ? parseRelevance(sumB) : null;
+        const relA = sumA?.relevance.rating;
+        const relB = sumB?.relevance.rating;
         const orderA = relA ? (RELEVANCE_ORDER[relA] ?? 4) : 4;
         const orderB = relB ? (RELEVANCE_ORDER[relB] ?? 4) : 4;
         if (orderA !== orderB) return orderA - orderB;

@@ -494,10 +494,17 @@ async function testStage4_E2E() {
   const summaryMap = new Map();
   for (const s of summaries) {
     const docId = s.doc_id ?? s.docId ?? "";
-    const relevance = (s.summary ?? "").includes("HIGH") ? "HIGH"
-      : (s.summary ?? "").includes("MEDIUM") ? "MEDIUM"
-      : (s.summary ?? "").includes("NONE") ? "NONE"
-      : "OTHER";
+    // Handle both structured summary objects and legacy string summaries
+    let relevance;
+    if (s.summary && typeof s.summary === "object" && s.summary.relevance) {
+      relevance = s.summary.relevance.rating ?? "OTHER";
+    } else {
+      const summaryStr = typeof s.summary === "string" ? s.summary : JSON.stringify(s.summary ?? "");
+      relevance = summaryStr.includes("HIGH") ? "HIGH"
+        : summaryStr.includes("MEDIUM") ? "MEDIUM"
+        : summaryStr.includes("NONE") ? "NONE"
+        : "OTHER";
+    }
     summaryMap.set(docId, relevance);
   }
   const e2eRerankMap = new Map();
@@ -523,12 +530,19 @@ async function testStage4_E2E() {
     }
   }
 
-  // Stats
-  const totalHigh = summaries.filter((s) => (s.summary ?? "").includes("HIGH")).length;
-  const totalMedium = summaries.filter((s) => (s.summary ?? "").includes("MEDIUM")).length;
-  const totalNone = summaries.filter((s) => (s.summary ?? "").includes("NONE")).length;
+  // Stats — handle structured summary objects
+  function getRelevance(s) {
+    if (s.summary && typeof s.summary === "object" && s.summary.relevance) {
+      return s.summary.relevance.rating ?? "";
+    }
+    return typeof s.summary === "string" ? s.summary : JSON.stringify(s.summary ?? "");
+  }
+  const totalHigh = summaries.filter((s) => getRelevance(s) === "HIGH" || getRelevance(s).includes?.("HIGH")).length;
+  const totalMedium = summaries.filter((s) => getRelevance(s) === "MEDIUM" || getRelevance(s).includes?.("MEDIUM")).length;
+  const totalLow = summaries.filter((s) => getRelevance(s) === "LOW" || getRelevance(s).includes?.("LOW")).length;
+  const totalNone = summaries.filter((s) => getRelevance(s) === "NONE" || getRelevance(s).includes?.("NONE")).length;
 
-  console.log(`\n  Overall: ${summaries.length} summarized → ${totalHigh} HIGH, ${totalMedium} MEDIUM, ${totalNone} NONE`);
+  console.log(`\n  Overall: ${summaries.length} summarized → ${totalHigh} HIGH, ${totalMedium} MEDIUM, ${totalLow} LOW, ${totalNone} NONE`);
   console.log(`  Hit rate: ${((totalHigh + totalMedium) / Math.max(summaries.length, 1) * 100).toFixed(0)}%`);
 }
 

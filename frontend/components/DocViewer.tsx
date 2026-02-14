@@ -1,13 +1,20 @@
 "use client";
 
-import { useEffect, useCallback, useState, useMemo } from "react";
-import { marked } from "marked";
+import { useEffect, useCallback, useState } from "react";
+import type { StructuredSummary } from "@/lib/types";
 
 interface DocViewerProps {
   docId: string | null;
   onClose: () => void;
-  summary?: string;
+  summary?: StructuredSummary;
 }
+
+const ENGAGEMENT_LABELS: Record<string, string> = {
+  RULED: "ΑΠΟΦΑΝΘΗΚΕ",
+  DISCUSSED: "ΑΝΑΛΥΘΗΚΕ",
+  MENTIONED: "ΑΝΑΦΕΡΘΗΚΕ",
+  NOT_ADDRESSED: "ΔΕΝ ΕΞΕΤΑΣΤΗΚΕ",
+};
 
 export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
   const [title, setTitle] = useState("Φόρτωση...");
@@ -15,11 +22,6 @@ export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summaryExpanded, setSummaryExpanded] = useState(true);
-
-  const summaryHtml = useMemo(() => {
-    if (!summary) return "";
-    return marked.parse(summary) as string;
-  }, [summary]);
 
   const fetchDoc = useCallback(async (id: string) => {
     setLoading(true);
@@ -90,7 +92,7 @@ export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
 
         {/* Body */}
         <div className="p-5 overflow-y-auto text-sm leading-relaxed">
-          {/* AI Summary section */}
+          {/* AI Summary section — structured */}
           {summary && (
             <div className="mb-5">
               <button
@@ -110,11 +112,39 @@ export function DocViewer({ docId, onClose, summary }: DocViewerProps) {
                 Ανάλυση AI
               </button>
               {summaryExpanded && (
-                <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3">
-                  <div
-                    className="prose prose-sm max-w-none text-gray-700 [&_strong]:text-gray-900"
-                    dangerouslySetInnerHTML={{ __html: summaryHtml }}
-                  />
+                <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3 space-y-3">
+                  {/* Core issue */}
+                  <div>
+                    <div className="text-[11px] uppercase tracking-wider text-indigo-400 mb-0.5">Κύριο νομικό ζήτημα</div>
+                    <p className="text-[13px] text-gray-800 leading-relaxed font-medium">{summary.coreIssue}</p>
+                  </div>
+
+                  {/* Facts */}
+                  <div>
+                    <div className="text-[11px] uppercase tracking-wider text-indigo-400 mb-0.5">Ιστορικό</div>
+                    <p className="text-[13px] text-gray-700 leading-relaxed">{summary.facts}</p>
+                  </div>
+
+                  {/* Findings */}
+                  {summary.findings.engagement !== "NOT_ADDRESSED" && (
+                    <div>
+                      <div className="text-[11px] uppercase tracking-wider text-indigo-400 mb-0.5">
+                        Ευρήματα [{ENGAGEMENT_LABELS[summary.findings.engagement]}]
+                      </div>
+                      <p className="text-[13px] text-gray-700 leading-relaxed">{summary.findings.analysis}</p>
+                      {summary.findings.quote && (
+                        <blockquote className="mt-1.5 pl-3 border-l-2 border-indigo-300 text-[13px] text-gray-600 italic">
+                          «{summary.findings.quote}»
+                        </blockquote>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Outcome */}
+                  <div>
+                    <div className="text-[11px] uppercase tracking-wider text-indigo-400 mb-0.5">Αποτέλεσμα</div>
+                    <p className="text-[13px] text-gray-700 leading-relaxed">{summary.outcome}</p>
+                  </div>
                 </div>
               )}
             </div>

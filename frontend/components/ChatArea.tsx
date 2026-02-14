@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { DocViewer } from "./DocViewer";
-import type { ChatMessage, SearchResult, UsageData, ActivityEntry, SummaryEntry } from "@/lib/types";
+import type { ChatMessage, SearchResult, UsageData, ActivityEntry, SummaryEntry, StructuredSummary } from "@/lib/types";
 import { MODELS } from "@/lib/types";
 
 interface AssistantState {
@@ -77,8 +77,8 @@ export function ChatArea() {
     summarizeTotal: null,
   });
 
-  // Stores summarizer output per doc_id — survives across messages
-  const [summaryCache, setSummaryCache] = useState<Record<string, string>>({});
+  // Stores structured summarizer output per doc_id — survives across messages
+  const [summaryCache, setSummaryCache] = useState<Record<string, StructuredSummary>>({});
 
   // Stable session ID for logging — persists across messages within a page session
   const sessionId = useMemo(() => crypto.randomUUID(), []);

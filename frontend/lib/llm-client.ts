@@ -12,7 +12,7 @@
 
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
-import type { ChatMessage, ModelConfig, SearchResult, UsageData } from "./types";
+import type { ChatMessage, ModelConfig, SearchResult, StructuredSummary, UsageData } from "./types";
 import { MODELS, COURT_NAMES } from "./types";
 import { cohereRerank } from "./cohere-reranker";
 
@@ -193,7 +193,7 @@ interface SSEYield {
 
 interface SummaryResult {
   docId: string;
-  summary: string;
+  summary: StructuredSummary;
   relevance: string; // HIGH, MEDIUM, LOW, NONE
   courtLevel: string;
   court: string;
@@ -215,6 +215,77 @@ function calculateCost(
 ): number {
   return (inputTokens / 1_000_000) * modelCfg.pricing.input +
          (outputTokens / 1_000_000) * modelCfg.pricing.output;
+}
+
+/**
+ * Strip noise from user query for summarizer focus.
+ *
+ * The summarizer evaluates document CONTENT, not metadata. Remove:
+ * 1. Temporal constraints ("κατά την τελευταία πενταετία", "μετά το 2020")
+ * 2. Court type mentions ("στο Ανώτατο Δικαστήριο") — already in court_level filter
+ * 3. Action/instruction prefixes ("Βρες μου αποφάσεις...")
+ * 4. Quantity markers ("τις 10 πιο σημαντικές")
+ *
+ * Falls back to original if result is too short (< 15 chars).
+ */
+export function distillSummarizerFocus(query: string): string {
+  let text = query.trim();
+
+  // 1. Strip temporal constraints
+  const temporalPatterns = [
+    /κατά τη[νη]?\s+τελευταί[αη]\s+(?:πενταετία|δεκαετία|τριετία|διετία)/gi,
+    /τ(?:α|ης|ων)\s+τελευταί(?:α|ες|ων|ων)\s+\d+\s+(?:χρόνι[αω]|ετ[ηών]|μήν(?:ες|ών))/gi,
+    /(?:μετά|από|πριν)\s+(?:το|τ[ηο]ν?)\s+(?:έτος\s+)?\d{4}/gi,
+    /(?:μεταξύ|από)\s+\d{4}\s+(?:και|έως|μέχρι|ως)\s+\d{4}/gi,
+    /πρόσφατ(?:ες|α|ων|η)\s*/gi,
+    /τ(?:ης|ων)\s+τελευταί(?:ας|ων)\s+(?:πενταετίας|δεκαετίας|τριετίας|διετίας|περιόδου)/gi,
+  ];
+  for (const pat of temporalPatterns) {
+    text = text.replace(pat, " ");
+  }
+
+  // 2. Strip court type mentions (already handled by court_level filter)
+  const courtPatterns = [
+    /(?:στ[οα]|του|τ(?:ης|ων)|ενώπιον(?:\s+του)?|από\s+τ[οα])\s+(?:Ανώτατ[οα]|Ανωτάτου)\s+(?:Συνταγματικ[οό](?:ύ)?\s+)?Δικαστήρι[οα](?:ύ)?/gi,
+    /(?:στ[οα]|του|τ(?:ης|ων)|ενώπιον(?:\s+του)?|από\s+τ[οα])\s+Εφετεί[οα](?:ύ)?/gi,
+    /(?:σε|στ[αο]|τ(?:ων|α))\s+(?:πρωτ[οό]δικ[αο]|Επαρχιακ[αάό])\s+[Δδ]ικαστήρι[αο](?:ύ)?/gi,
+    /(?:στ[οα]|του|τ(?:ης|ων))\s+[Δδ]ιοικητικ[οό](?:ύ)?\s+[Δδ]ικαστήρι[οα](?:ύ)?/gi,
+    /(?:στ[οα]|του|τ(?:ης|ων))\s+Οικογενειακ[οό](?:ύ)?\s+[Δδ]ικαστήρι[οα](?:ύ)?/gi,
+  ];
+  for (const pat of courtPatterns) {
+    text = text.replace(pat, " ");
+  }
+
+  // 3. Strip action/instruction prefixes
+  const actionPatterns = [
+    /^(?:Βρες|Αναζήτησε|Ψάξε|Δείξε|Εντόπισε)(?:\s+μου)?\s+(?:αποφάσεις|υποθέσεις|δικαστικές\s+αποφάσεις)?\s*(?:σχετικ[άέ]\s+(?:με|με\s+τ[οηα]ν?))?\s*/gi,
+    /^(?:Θέλω|Χρειάζομαι)\s+(?:να\s+(?:βρω|δω|αναζητήσω))?\s*(?:αποφάσεις|υποθέσεις)?\s*(?:σχετικ[άέ]\s+(?:με|με\s+τ[οηα]ν?))?\s*/gi,
+    /^(?:Ποιες|Ποια)\s+(?:αποφάσεις|υποθέσεις)\s+(?:αφορούν|σχετίζονται\s+με)\s*/gi,
+  ];
+  for (const pat of actionPatterns) {
+    text = text.replace(pat, "");
+  }
+
+  // 4. Strip quantity markers
+  const quantityPatterns = [
+    /τ(?:ις|α|ους?)\s+\d+\s+(?:πιο|πλέον)\s+(?:σημαντικ[έά]ς?|σχετικ[έά]ς?)\s*/gi,
+    /τ(?:α|ις)\s+(?:πρώτ[αες]|κύρι[αες])\s+\d+\s*/gi,
+  ];
+  for (const pat of quantityPatterns) {
+    text = text.replace(pat, " ");
+  }
+
+  // Normalize whitespace
+  text = text.replace(/\s+/g, " ").trim();
+  // Remove leading/trailing punctuation artifacts
+  text = text.replace(/^[,;:\s]+|[,;:\s]+$/g, "").trim();
+
+  // Fallback: if stripping removed too much, use original
+  if (text.length < 15) {
+    return query.trim();
+  }
+
+  return text;
 }
 
 function formatApiError(err: unknown): string {
@@ -240,16 +311,6 @@ function extractYearFromDocId(docId: string): number {
   return match ? parseInt(match[1], 10) : 0;
 }
 
-/**
- * Parse relevance rating from summary text.
- */
-function parseRelevance(summary: string): string {
-  const section = summary.split(/RELEVANCE RATING/i)[1] ?? "";
-  for (const level of ["HIGH", "MEDIUM", "LOW", "NONE"]) {
-    if (new RegExp(`\\b${level}\\b`).test(section)) return level;
-  }
-  return "NONE";
-}
 
 /**
  * Detect court_level from court code.
@@ -290,15 +351,29 @@ function formatSummariesForLLM(results: SummaryResult[]): string {
   const top = sorted.slice(0, MAX_FULL_SUMMARIES);
   const rest = sorted.slice(MAX_FULL_SUMMARIES);
 
-  // Full summaries for top cases
+  // Full summaries for top cases — reconstruct text from structured fields
   const fullSection = top
     .map((r, i) => {
       const courtLabel = COURT_NAMES[r.court] ?? r.court;
-      return `══════════════════════════════════════════\n` +
-        `[Case ${i + 1}] ${courtLabel} | ${r.year} | Relevance: ${r.relevance}\n` +
-        `Document ID: ${r.docId}\n` +
-        `══════════════════════════════════════════\n\n` +
-        r.summary;
+      const s = r.summary;
+      const parts = [
+        `══════════════════════════════════════════`,
+        `[Case ${i + 1}] ${courtLabel} | ${r.year} | Relevance: ${r.relevance}`,
+        `Document ID: ${r.docId}`,
+        `══════════════════════════════════════════`,
+        ``,
+        `${s.caseHeader.parties} — ${s.caseHeader.court}, ${s.caseHeader.date}, ${s.caseHeader.caseNumber}`,
+        `Status: ${s.status}`,
+        ``,
+        `Facts: ${s.facts}`,
+        ``,
+        `Core issue: ${s.coreIssue}`,
+        ``,
+        `Findings [${s.findings.engagement}]: ${s.findings.analysis}`,
+      ];
+      if (s.findings.quote) parts.push(`Quote: «${s.findings.quote}»`);
+      parts.push(``, `Outcome: ${s.outcome}`);
+      return parts.join("\n");
     })
     .join("\n\n");
 
@@ -308,9 +383,7 @@ function formatSummariesForLLM(results: SummaryResult[]): string {
   const briefSection = rest
     .map((r) => {
       const courtLabel = COURT_NAMES[r.court] ?? r.court;
-      // Extract first sentence of summary as brief description
-      const firstLine = r.summary.split("\n").find((l) => l.trim().length > 20) ?? "";
-      return `- [${r.relevance}] ${courtLabel}, ${r.year} — Document ID: ${r.docId} — ${firstLine.slice(0, 120)}`;
+      return `- [${r.relevance}] ${courtLabel}, ${r.year} — Document ID: ${r.docId} — ${r.summary.coreIssue.slice(0, 120)}`;
     })
     .join("\n");
 
@@ -357,6 +430,94 @@ function extractDecisionText(text: string, maxChars: number): string {
     decisionText.slice(-tailSize);
 }
 
+/** JSON Schema for structured summarizer output (OpenAI Structured Outputs). */
+const SUMMARY_JSON_SCHEMA = {
+  name: "case_summary",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: {
+      caseHeader: {
+        type: "object",
+        properties: {
+          parties: { type: "string", description: "Plaintiff v Defendant (Greek)" },
+          court: { type: "string", description: "Court name in Greek" },
+          date: { type: "string", description: "Decision date" },
+          caseNumber: { type: "string", description: "Case number (Αρ. Αγωγής, Αρ. Έφεσης, etc.)" },
+        },
+        required: ["parties", "court", "date", "caseNumber"],
+        additionalProperties: false,
+      },
+      status: { type: "string", description: "ΑΠΟΦΑΣΗ or ΕΝΔΙΑΜΕΣΗ ΑΠΟΦΑΣΗ" },
+      facts: { type: "string", description: "Brief background in 2-3 sentences (Greek)" },
+      coreIssue: { type: "string", description: "The core legal issue the court decided, in 1-2 sentences (Greek)" },
+      findings: {
+        type: "object",
+        properties: {
+          engagement: {
+            type: "string",
+            enum: ["RULED", "DISCUSSED", "MENTIONED", "NOT_ADDRESSED"],
+            description: "How deeply the court addressed the research topic",
+          },
+          analysis: {
+            type: "string",
+            description: "If RULED/DISCUSSED: what the court analyzed. If MENTIONED: brief note. If NOT_ADDRESSED: empty string.",
+          },
+          quote: {
+            type: "string",
+            description: "Exact quote from the decision in Greek. Empty string if NOT_ADDRESSED.",
+          },
+        },
+        required: ["engagement", "analysis", "quote"],
+        additionalProperties: false,
+      },
+      outcome: { type: "string", description: "What the court ordered (Greek)" },
+      relevance: {
+        type: "object",
+        properties: {
+          rating: {
+            type: "string",
+            enum: ["HIGH", "MEDIUM", "LOW", "NONE"],
+            description: "Research value for the lawyer",
+          },
+          reasoning: {
+            type: "string",
+            description: "1-2 sentences explaining why this rating (Greek)",
+          },
+        },
+        required: ["rating", "reasoning"],
+        additionalProperties: false,
+      },
+    },
+    required: ["caseHeader", "status", "facts", "coreIssue", "findings", "outcome", "relevance"],
+    additionalProperties: false,
+  },
+} as const;
+
+/**
+ * Post-process structured summary: enforce consistency rules.
+ * - If engagement=NOT_ADDRESSED and rating>LOW → downgrade to LOW
+ * - If engagement=MENTIONED and rating>MEDIUM → cap at MEDIUM
+ */
+function enforceRelevanceRules(summary: StructuredSummary): StructuredSummary {
+  const { engagement } = summary.findings;
+  const { rating } = summary.relevance;
+
+  if (engagement === "NOT_ADDRESSED" && (rating === "HIGH" || rating === "MEDIUM")) {
+    return {
+      ...summary,
+      relevance: { ...summary.relevance, rating: "LOW" },
+    };
+  }
+  if (engagement === "MENTIONED" && rating === "HIGH") {
+    return {
+      ...summary,
+      relevance: { ...summary.relevance, rating: "MEDIUM" },
+    };
+  }
+  return summary;
+}
+
 async function summarizeDocument(
   client: OpenAI,
   docId: string,
@@ -373,48 +534,39 @@ async function summarizeDocument(
 The lawyer's research question: "${userQuery}"
 Analysis focus: "${focus}"
 
-Summarize this court decision in 400-700 words:
+Return a structured JSON summary of this court decision. All text fields must be in Greek.
 
-1. CASE HEADER: Parties, court, date, case number (2 lines max)
-2. STATUS: Final decision (ΑΠΟΦΑΣΗ) or interim (ΕΝΔΙΑΜΕΣΗ ΑΠΟΦΑΣΗ)?
-3. FACTS: Brief background — what happened, who sued whom, what was claimed (3-4 sentences)
-4. WHAT THE CASE IS ACTUALLY ABOUT: In 1-2 sentences, state the core legal issue the court decided.
-5. COURT'S FINDINGS on "${focus}":
-   Pick ONE engagement level:
-   - RULED: The court analyzed the topic and reached a conclusion or ruling.
-   - DISCUSSED: The court substantively engaged with the topic but did NOT reach a conclusion.
-   - MENTIONED: The topic was only briefly referenced without substantive analysis.
-   - NOT ADDRESSED: The topic does not appear in the decision.
-   State the level, then:
-   - If RULED: Quote the court's conclusion in original Greek.
-   - If DISCUSSED: Describe what the court analyzed. Quote the most relevant passage.
-   - If MENTIONED: Note the reference briefly.
-   - If NOT ADDRESSED: Write "NOT ADDRESSED."
-6. OUTCOME: What did the court order?
-7. RELEVANCE RATING — rate based on RESEARCH VALUE to the lawyer, NOT on engagement level above:
-   The engagement level (section 5) describes HOW the court addressed the topic.
-   The relevance rating describes WHETHER THIS CASE IS USEFUL for the lawyer's research — these are DIFFERENT things.
-   A case can be NOT ADDRESSED on the exact topic but still MEDIUM/HIGH relevance if the facts, parties, or legal context overlap significantly.
+FIELD GUIDELINES:
 
-   Rate as HIGH / MEDIUM / LOW / NONE:
-   - HIGH: A lawyer researching this topic MUST read this case. The court analyzed the specific legal issue, or the case involves nearly identical facts/parties/legal questions.
-   - MEDIUM: A lawyer would BENEFIT from reading this case. It shares key factual or legal elements: same type of dispute, similar parties (e.g., foreign nationals), overlapping legal area, or cross-border elements — even if the court's main focus was different.
-   - LOW: Tangentially related. Same broad area of law but different context.
-   - NONE: No connection to the research question whatsoever — completely different area of law, different type of dispute, no overlapping facts.
+- **caseHeader**: Extract parties, court, date, case number from the document header.
+- **status**: "ΑΠΟΦΑΣΗ" for final decisions, "ΕΝΔΙΑΜΕΣΗ ΑΠΟΦΑΣΗ" for interim.
+- **facts**: Brief background in 2-3 sentences — who sued whom, what was claimed.
+- **coreIssue**: The core legal issue the court actually decided (may differ from the research question).
+- **findings.engagement**: How deeply the court addressed "${focus}":
+  - RULED: Court analyzed the topic and reached a conclusion.
+  - DISCUSSED: Court substantively engaged but didn't conclude.
+  - MENTIONED: Topic briefly referenced without analysis.
+  - NOT_ADDRESSED: Topic does not appear in the decision.
+- **findings.analysis**: If RULED/DISCUSSED — describe what the court analyzed. If MENTIONED — brief note. If NOT_ADDRESSED — empty string.
+- **findings.quote**: Exact quote from the decision (Greek). Empty string if NOT_ADDRESSED.
+- **outcome**: What the court ordered.
+- **relevance.rating**: Research value for the lawyer:
+  - HIGH: Lawyer MUST read this — court analyzed the exact issue or nearly identical facts.
+  - MEDIUM: Lawyer would benefit — shares key legal elements, similar dispute type, cross-border elements.
+  - LOW: Tangentially related — same broad area but different context.
+  - NONE: No connection — completely different area of law.
+- **relevance.reasoning**: 1-2 sentences explaining the rating.
 
-   MANDATORY OVERRIDES (apply BEFORE deciding your rating):
-   - If the research question involves FOREIGN LAW and this case has foreign parties, cross-border assets, or references to non-Cypriot legal systems → rate at least MEDIUM, even if the court did not explicitly analyze foreign law as a topic.
-   - A purely domestic case (Cypriot parties, Cypriot assets, no foreign element) is LOW even if it involves the same area of law.
-   - Only rate NONE if the case is about a COMPLETELY DIFFERENT area of law (e.g., immigration, criminal, labor when the question is about family property).
+MANDATORY OVERRIDES:
+- Foreign-law research + foreign parties/cross-border assets → at least MEDIUM.
+- Purely domestic case (no foreign element) → at most LOW.
+- Completely different area of law → NONE.
 
 CRITICAL RULES:
 - ONLY state what is EXPLICITLY written in the text.
-- NEVER assume or infer a court's conclusion.
-- Distinguish between what a PARTY ARGUED and what the COURT DECIDED.
-- Include at least one EXACT QUOTE from the decision (in Greek).
-- A wrong summary is worse than no summary.
-
-Document ID: ${docId}`;
+- NEVER assume or infer conclusions.
+- Distinguish party arguments from court decisions.
+- A wrong summary is worse than no summary.`;
 
   const response = await client.chat.completions.create({
     model: SUMMARIZER_MODEL,
@@ -424,14 +576,35 @@ Document ID: ${docId}`;
     ],
     temperature: 0,
     max_tokens: SUMMARIZER_MAX_TOKENS,
+    response_format: {
+      type: "json_schema",
+      json_schema: SUMMARY_JSON_SCHEMA,
+    },
   });
 
-  const summary = response.choices[0]?.message?.content ?? "[Summary unavailable]";
+  const raw = response.choices[0]?.message?.content ?? "{}";
+  let summary: StructuredSummary;
+  try {
+    summary = JSON.parse(raw) as StructuredSummary;
+  } catch {
+    summary = {
+      caseHeader: { parties: "", court: "", date: "", caseNumber: "" },
+      status: "",
+      facts: "",
+      coreIssue: "",
+      findings: { engagement: "NOT_ADDRESSED", analysis: "", quote: "" },
+      outcome: "",
+      relevance: { rating: "NONE", reasoning: "Failed to parse summary" },
+    };
+  }
+
+  // Enforce consistency: NOT_ADDRESSED → max LOW
+  summary = enforceRelevanceRules(summary);
 
   return {
     docId,
     summary,
-    relevance: parseRelevance(summary),
+    relevance: summary.relevance.rating,
     courtLevel: getCourtLevel(court),
     court,
     year: extractYearFromDocId(docId),
@@ -884,10 +1057,14 @@ async function summarizeAllDocs(
     return { inputTokens: 0, outputTokens: 0, count: 0 };
   }
 
-  // Use only user query as focus. Legal context was found to add noise —
-  // summarizer can over-weight mention of specific regulations (false HIGH on C-docs)
-  // or under-weight docs that address the topic but don't cite expected laws (false NONE on B-docs).
-  const summarizerFocus = _lastUserQuery;
+  // Distill user query for summarizer focus: strip temporal constraints, court types,
+  // action prefixes. These are metadata concerns, not content evaluation criteria.
+  const summarizerFocus = distillSummarizerFocus(_lastUserQuery);
+  console.log(JSON.stringify({
+    event: "summarizer_focus_distilled",
+    raw: _lastUserQuery.slice(0, 200),
+    distilled: summarizerFocus.slice(0, 200),
+  }));
 
   emit({ event: "summarizing", data: { count: docs.length, focus: _lastUserQuery } });
 

@@ -2,14 +2,14 @@
 
 import { useMemo } from "react";
 import { marked } from "marked";
-import type { SearchResult, UsageData, ActivityEntry } from "@/lib/types";
+import type { SearchResult, UsageData, ActivityEntry, StructuredSummary } from "@/lib/types";
 import { SourceList } from "./SourceCard";
 
 interface MessageBubbleProps {
   role: "user" | "assistant";
   content: string;
   sources?: SearchResult[];
-  summaryCache?: Record<string, string>;
+  summaryCache?: Record<string, StructuredSummary>;
   activityLog?: ActivityEntry[];
   isStreaming?: boolean;
   usage?: UsageData | null;
