@@ -81,7 +81,11 @@ export function ChatArea() {
   const [summaryCache, setSummaryCache] = useState<Record<string, StructuredSummary>>({});
 
   // Stable session ID for logging — persists across messages within a page session
-  const sessionId = useMemo(() => crypto.randomUUID(), []);
+  // crypto.randomUUID() requires Secure Context (HTTPS) — fallback for HTTP
+  const sessionId = useMemo(() => {
+    try { return crypto.randomUUID(); }
+    catch { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+  }, []);
 
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);

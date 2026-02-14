@@ -1124,19 +1124,25 @@ export function chatStream(
 
   return new ReadableStream({
     async start(controller) {
+      let closed = false;
       function emit(event: SSEYield) {
-        const dataStr =
-          typeof event.data === "object"
-            ? JSON.stringify(event.data)
-            : String(event.data).replace(/\n/g, "\\n");
-        controller.enqueue(
-          encoder.encode(`event: ${event.event}\ndata: ${dataStr}\n\n`),
-        );
+        if (closed) return;
+        try {
+          const dataStr =
+            typeof event.data === "object"
+              ? JSON.stringify(event.data)
+              : String(event.data).replace(/\n/g, "\\n");
+          controller.enqueue(
+            encoder.encode(`event: ${event.event}\ndata: ${dataStr}\n\n`),
+          );
+        } catch {
+          closed = true;
+        }
       }
 
       if (!modelCfg) {
         emit({ event: "error", data: `Unknown model: ${modelKey}` });
-        controller.close();
+        if (!closed) controller.close();
         return;
       }
 
@@ -1151,7 +1157,7 @@ export function chatStream(
         emit({ event: "error", data: formatApiError(err) });
       }
 
-      controller.close();
+      if (!closed) controller.close();
     },
   });
 }
