@@ -1044,14 +1044,12 @@ async function handleSearch(
 
 /**
  * Phase 2: Summarize all collected documents.
- * Production: uses Summarizer Worker via Service Binding (each call = fresh connection pool).
- * Dev: falls back to direct OpenAI calls.
+ * Always uses direct OpenAI calls (no Service Binding).
  */
 async function summarizeAllDocs(
   client: OpenAI,
   docs: SearchResult[],
   emit: (event: SSEYield) => void,
-  summarizerBinding?: Fetcher,
 ): Promise<{ inputTokens: number; outputTokens: number; count: number }> {
   if (docs.length === 0) {
     return { inputTokens: 0, outputTokens: 0, count: 0 };
@@ -1072,81 +1070,30 @@ async function summarizeAllDocs(
   let totalOut = 0;
   let summarized = 0;
 
-  if (summarizerBinding) {
-    // Production: send batches of 5 to Summarizer Worker via Service Binding
-    // Each call = new request = fresh 6-connection pool
-    const BATCH_SIZE = 5;
-    for (let i = 0; i < docs.length; i += BATCH_SIZE) {
-      const batch = docs.slice(i, i + BATCH_SIZE);
+  // Direct OpenAI calls with higher concurrency
+  const fetchDoc = _fetchDocumentFn;
+  if (!fetchDoc) return { inputTokens: 0, outputTokens: 0, count: 0 };
 
-      // Emit progress to keep SSE connection alive and inform the UI
-      emit({ event: "summarizing", data: { count: docs.length, progress: i, focus: _lastUserQuery } });
+  const CONCURRENCY = 5;
+  for (let i = 0; i < docs.length; i += CONCURRENCY) {
+    const batch = docs.slice(i, i + CONCURRENCY);
 
-      try {
-        const res = await summarizerBinding.fetch("https://summarizer/", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            docIds: batch.map((d) => d.doc_id),
-            userQuery: _lastUserQuery,
-            focus: summarizerFocus,
-            openaiApiKey: process.env.OPENAI_API_KEY,
-          }),
-        });
+    // Emit progress to keep SSE connection alive
+    emit({ event: "summarizing", data: { count: docs.length, progress: i, focus: _lastUserQuery } });
 
-        if (!res.ok) {
-          console.error("[Summarizer] Batch error:", await res.text());
-          continue;
-        }
-
-        const data = await res.json() as {
-          results: Array<{
-            docId: string;
-            summary: string;
-            relevance: string;
-            court: string;
-            year: number;
-            inputTokens: number;
-            outputTokens: number;
-          }>;
-        };
-
-        for (const result of data.results) {
+    await Promise.all(
+      batch.map(async (r) => {
+        const text = await fetchDoc(r.doc_id);
+        if (!text) return;
+        const result = await summarizeDocument(client, r.doc_id, text, summarizerFocus, _lastUserQuery);
+        if (result) {
           totalIn += result.inputTokens;
           totalOut += result.outputTokens;
           summarized++;
           emit({ event: "summaries", data: [{ docId: result.docId, summary: result.summary }] });
         }
-      } catch (err) {
-        console.error("[Summarizer] Service binding error:", err instanceof Error ? err.message : err);
-      }
-    }
-  } else {
-    // Dev fallback: direct OpenAI calls with higher concurrency
-    const fetchDoc = _fetchDocumentFn;
-    if (!fetchDoc) return { inputTokens: 0, outputTokens: 0, count: 0 };
-
-    const CONCURRENCY = 5;
-    for (let i = 0; i < docs.length; i += CONCURRENCY) {
-      const batch = docs.slice(i, i + CONCURRENCY);
-
-      // Emit progress to keep SSE connection alive
-      emit({ event: "summarizing", data: { count: docs.length, progress: i, focus: _lastUserQuery } });
-
-      await Promise.all(
-        batch.map(async (r) => {
-          const text = await fetchDoc(r.doc_id);
-          if (!text) return;
-          const result = await summarizeDocument(client, r.doc_id, text, summarizerFocus, _lastUserQuery);
-          if (result) {
-            totalIn += result.inputTokens;
-            totalOut += result.outputTokens;
-            summarized++;
-            emit({ event: "summaries", data: [{ docId: result.docId, summary: result.summary }] });
-          }
-        }),
-      );
-    }
+      }),
+    );
   }
 
   console.log(JSON.stringify({
@@ -1157,7 +1104,6 @@ async function summarizeAllDocs(
     summarized,
     inputTokens: totalIn,
     outputTokens: totalOut,
-    viaServiceBinding: !!summarizerBinding,
   }));
 
   return { inputTokens: totalIn, outputTokens: totalOut, count: summarized };
@@ -1169,7 +1115,6 @@ export function chatStream(
   messages: ChatMessage[],
   modelKey: string,
   searchFn: SearchFn,
-  summarizerBinding?: Fetcher,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const modelCfg = MODELS[modelKey];
@@ -1198,9 +1143,9 @@ export function chatStream(
       try {
         const system = getSystem();
         if (modelCfg.provider === "openai") {
-          await streamOpenAI(messages, modelCfg, system, searchFn, emit, summarizerBinding);
+          await streamOpenAI(messages, modelCfg, system, searchFn, emit);
         } else {
-          await streamClaude(messages, modelCfg, system, searchFn, emit, summarizerBinding);
+          await streamClaude(messages, modelCfg, system, searchFn, emit);
         }
       } catch (err) {
         emit({ event: "error", data: formatApiError(err) });
@@ -1219,7 +1164,6 @@ async function streamOpenAI(
   system: string,
   searchFn: SearchFn,
   emit: (event: SSEYield) => void,
-  summarizerBinding?: Fetcher,
 ) {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -1360,7 +1304,7 @@ async function streamOpenAI(
   }
 
   // Phase 2: Summarize only reranked docs
-  const summarizerResult = await summarizeAllDocs(client, docsToSummarize, emit, summarizerBinding);
+  const summarizerResult = await summarizeAllDocs(client, docsToSummarize, emit);
 
   // Final sources emit
   if (allSources.length > 0) {
@@ -1414,7 +1358,6 @@ async function streamClaude(
   system: string,
   searchFn: SearchFn,
   emit: (event: SSEYield) => void,
-  summarizerBinding?: Fetcher,
 ) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -1546,7 +1489,7 @@ async function streamClaude(
   }
 
   // Phase 2: Summarize only reranked docs
-  const summarizerResult = await summarizeAllDocs(openaiClient, docsToSummarize, emit, summarizerBinding);
+  const summarizerResult = await summarizeAllDocs(openaiClient, docsToSummarize, emit);
 
   // Final sources emit
   if (allSources.length > 0) emit({ event: "sources", data: allSources });

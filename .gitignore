@@ -14,8 +14,6 @@ env/
 # Node
 node_modules/
 .next/
-.open-next/
-.wrangler/
 *.log
 
 # IDE
@@ -30,3 +28,7 @@ tmp/
 # Downloaded data
 data/
 data.zip
+
+# Database dumps
+*.fc
+cylaw_dump.*

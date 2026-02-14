@@ -3,8 +3,7 @@
  *
  * GET /api/doc?doc_id=administrative/2016/201601-1113-13.md
  *
- * In development: reads .md files from local data/cases_parsed/ directory.
- * In production: reads from Cloudflare R2 bucket.
+ * Reads .md files from local data/cases_parsed/ directory.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -49,16 +48,8 @@ export async function GET(request: NextRequest) {
 }
 
 async function loadDocument(docId: string): Promise<string | null> {
-  const isDev = process.env.NODE_ENV === "development" || process.env.NEXTJS_ENV === "development";
-
-  if (isDev) {
-    // Try R2 first (works with initOpenNextCloudflareForDev), fallback to disk
-    const r2Text = await loadFromR2(docId).catch(() => null);
-    if (r2Text) return r2Text;
-    return loadFromDisk(docId);
-  }
-
-  return loadFromR2(docId);
+  // Always use local disk - no R2
+  return loadFromDisk(docId);
 }
 
 /** Development: read from local data/cases_parsed/ directory */
@@ -78,14 +69,3 @@ async function loadFromDisk(docId: string): Promise<string | null> {
   }
 }
 
-/** Production / dev with wrangler: read from Cloudflare R2 bucket */
-async function loadFromR2(docId: string): Promise<string | null> {
-  const { getCloudflareContext } = await import("@opennextjs/cloudflare");
-  const { env } = await getCloudflareContext({ async: true });
-  const bucket = (env as unknown as CloudflareEnv).DOCS_BUCKET;
-  const object = await bucket.get(docId);
-
-  if (!object) return null;
-
-  return object.text();
-}

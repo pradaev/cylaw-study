@@ -1,0 +1,42 @@
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    restart: always
+    environment:
+      POSTGRES_DB: cylaw
+      POSTGRES_USER: cylaw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgresql.prod.conf:/etc/postgresql/postgresql.conf
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    shm_size: 4g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cylaw -d cylaw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nextjs:
+    build:
+      context: .
+      dockerfile: Dockerfile.nextjs
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://cylaw:${POSTGRES_PASSWORD}@postgres:5432/cylaw
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      COHERE_API_KEY: ${COHERE_API_KEY}
+      NODE_ENV: production
+    volumes:
+      - ./data/cases_parsed:/data/cases_parsed:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  pgdata:

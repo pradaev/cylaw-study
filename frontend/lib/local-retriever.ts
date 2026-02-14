@@ -98,19 +98,52 @@ export const localSearchFn: SearchFn = async (
 };
 
 /**
- * Fetch full text of a single document from the search server.
+ * Fetch full text of a single document from the search server (dev with Python server).
  */
 export const localFetchDocument: FetchDocumentFn = async (
   docId: string,
 ): Promise<string | null> => {
+  // Try search server first (dev mode with Python server running)
   try {
-    const res = await fetch(
-      `${SEARCH_SERVER_URL}/document?doc_id=${encodeURIComponent(docId)}`,
-      { signal: AbortSignal.timeout(15000) },
-    );
-    if (!res.ok) return null;
-    const data = (await res.json()) as { text: string };
-    return data.text;
+    const serverUp = await isSearchServerUp();
+    if (serverUp) {
+      const res = await fetch(
+        `${SEARCH_SERVER_URL}/document?doc_id=${encodeURIComponent(docId)}`,
+        { signal: AbortSignal.timeout(15000) },
+      );
+      if (res.ok) {
+        const data = (await res.json()) as { text: string };
+        return data.text;
+      }
+    }
+  } catch {
+    // Fall through to disk
+  }
+
+  // Fallback: read directly from disk
+  return diskFetchDocument(docId);
+};
+
+/**
+ * Fetch full text of a document directly from disk (cases_parsed directory).
+ */
+export const diskFetchDocument: FetchDocumentFn = async (
+  docId: string,
+): Promise<string | null> => {
+  const { readFile } = await import("fs/promises");
+  const { join, resolve } = await import("path");
+
+  const normalizedDocId = docId.endsWith(".md") ? docId : `${docId}.md`;
+
+  // Try relative to cwd/../data/cases_parsed (dev + standalone Docker)
+  const casesDir = join(process.cwd(), "..", "data", "cases_parsed");
+  const filePath = resolve(casesDir, normalizedDocId);
+
+  // Prevent traversal
+  if (!filePath.startsWith(resolve(casesDir))) return null;
+
+  try {
+    return await readFile(filePath, "utf-8");
   } catch {
     return null;
   }

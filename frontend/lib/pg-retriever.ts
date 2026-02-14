@@ -414,30 +414,37 @@ function rrfFusion(
 /**
  * Create a hybrid search function that combines vector search + BM25.
  *
- * Vector search priority:
- *   1. pgvector (text-embedding-3-large 3072d) — if chunks table has data
- *   2. Vectorize (text-embedding-3-small 1536d) — fallback
- *
- * Falls back to vector-only if DATABASE_URL is not set.
+ * Uses pgvector (text-embedding-3-large 2000d) for vector search.
+ * If DATABASE_URL is not set, logs error and returns empty results.
  */
-export function createHybridSearchFn(vectorizeSearchFn: SearchFn): SearchFn {
+export function createHybridSearchFn(): SearchFn {
   return async (
     query: string,
     courtLevel?: string,
     yearFrom?: number,
     yearTo?: number,
   ): Promise<SearchResult[]> => {
-    // Choose vector search backend: pgvector if available, else Vectorize
-    const usePgvector = await hasPgvectorEmbeddings();
-    const vectorSearchFn = usePgvector ? pgvectorSearch : vectorizeSearchFn;
+    // Check if DATABASE_URL is set
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      console.error("DATABASE_URL not set - hybrid search unavailable");
+      return [];
+    }
 
-    // Run vector search and BM25 in parallel
+    // Check if pgvector has embeddings
+    const usePgvector = await hasPgvectorEmbeddings();
+    if (!usePgvector) {
+      console.error("No pgvector embeddings available");
+      return [];
+    }
+
+    // Run pgvector search and BM25 in parallel
     const [vectorResults, bm25Results] = await Promise.all([
-      vectorSearchFn(query, courtLevel, yearFrom, yearTo),
+      pgvectorSearch(query, courtLevel, yearFrom, yearTo),
       bm25Search(query, yearFrom, yearTo),
     ]);
 
-    // If no BM25 results (no DATABASE_URL), return vector-only
+    // If no BM25 results, return vector-only
     if (bm25Results.length === 0) {
       return vectorResults;
     }
